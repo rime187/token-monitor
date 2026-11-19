@@ -1,0 +1,73 @@
+.shell:has(.pq-panel) > .total-panel,
+.shell:has(.pq-panel) > .titlebar .tabs {
+  display: none;
+}
+
+.plugin-content:has(> .pq-panel) {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.pq-panel {
+  container-type: inline-size;
+  color: var(--plugin-default);
+  font-family: system-ui, "Microsoft YaHei UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 2px;
+}
+
+.pq-heading, .pq-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 6px;
+}
+
+.pq-heading { align-items: center; margin-bottom: 4px; }
+.pq-title { margin: 0; font-size: 17px; font-weight: 680; }
+.pq-more {
+  background: transparent;
+  color: var(--plugin-accent);
+  border: 0;
+  padding: 4px 0 4px 6px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.pq-more:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+.pq-row {
+  position: relative;
+  border-bottom: 1px solid var(--line);
+  padding: 7px 0 7px 11px;
+  line-height: 1.3;
+}
+.pq-row::before {
+  content: '';
+  position: absolute;
+  top: 11px;
+  left: 1px;
+  width: 3px;
+  height: 13px;
+  border-radius: 2px;
+  background: var(--provider-tint);
+}
+.pq-row[data-provider="codex"] { --provider-tint: #50b797; }
+.pq-row[data-provider="antigravity"] { --provider-tint: #719bf0; }
+.pq-row[data-provider="grok"] { --provider-tint: #a486d1; }
+.pq-row[data-provider="deepseek"] { --provider-tint: #5989df; }
+.pq-name { font-size: 13px; font-weight: 620; }
+.pq-value { font-size: 16px; font-weight: 660; text-align: end; }
+.pq-row[data-ready="false"] .pq-value { color: var(--plugin-muted); font-size: 13px; }
+.pq-detail, .pq-footer { color: var(--plugin-muted); font-size: 11px; line-height: 1.4; }
+.pq-subline { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 1px 7px; margin-top: 2px; }
+.pq-detail { min-width: 0; overflow-wrap: anywhere; }
+.pq-stamp { color: var(--plugin-muted); white-space: nowrap; font-size: 10px; }
+.pq-footer { margin: 8px 0 0; }
+@container (max-width: 245px) {
+  .pq-row { grid-template-columns: auto minmax(0, 1fr); }
+  .pq-name { font-size: 12px; }
+  .pq-value { font-size: 14px; }
+}

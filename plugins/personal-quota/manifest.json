@@ -1,0 +1,14 @@
+{
+  "tmApi": 1,
+  "id": "personal-quota",
+  "name": "我的 AI 额度",
+  "description": "在首页查看 Codex、Antigravity、Grok Bot 的剩余额度和 DeepSeek API 余额。",
+  "version": "1.0.0",
+  "ui": "ui.mjs",
+  "css": ["panel.css"],
+  "files": ["ui.mjs", "panel.css"],
+  "views": [
+    {"id": "overview", "title": "我的 AI 额度", "targets": ["main.home.content"], "mode": "replace"}
+  ],
+  "defaults": {"content": {"main.home.content": "overview"}}
+}
