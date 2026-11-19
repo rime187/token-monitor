@@ -59,6 +59,39 @@ test('only the confirmed Cursor included pool represents The X Subscription', as
   assert.equal(quotaOverview([account('cursor', [{ label: 'Included usage', kind: 'weekly' }])], now)[2].value, '未知');
 });
 
+test('uses a Cursor panel reading only for Grok and keeps the displayed reset date precise to the day', async () => {
+  const { quotaOverview } = await overview;
+  const accounts = [
+    account('codex', [{ kind: 'weekly', remainingPercent: 83 }]),
+    account('antigravity', [{ kind: 'session', label: 'Gemini', usedPercent: 41 }]),
+    account('cursor', [], { status: 'notConfigured' }),
+    account('deepseek', [{ metric: 'credits', remaining: 2, currency: 'USD' }])
+  ];
+  const baseline = quotaOverview(accounts, now);
+  assert.equal(baseline[2].value, '未连接');
+
+  for (const [usedPercent, value] of [[0, '100%'], [100, '0%']]) {
+    const sample = { usedPercent, resetText: '11月26日', observedAt: new Date(now).toISOString(), plan: 'Premium', live: true };
+    const rows = quotaOverview(accounts, now, sample);
+    assert.equal(rows[2].value, value);
+    assert.match(rows[2].detail, /11月26日/);
+    assert.doesNotMatch(rows[2].detail, /11月26日[^·／]*\d{1,2}:\d{2}|上次读取/);
+    assert.deepEqual(rows.filter(row => row.id !== 'grok'), baseline.filter(row => row.id !== 'grok'));
+  }
+});
+
+test('identifies a cached Cursor reading and prefers a confirmed native pool when it becomes available', async () => {
+  const { quotaOverview } = await overview;
+  const sample = { usedPercent: 38, resetText: '11月26日', observedAt: '2026-11-18T12:00:00Z', plan: 'Premium', live: false };
+  const cached = quotaOverview([], now, sample)[2];
+  assert.equal(cached.value, '62%');
+  assert.match(cached.detail, /上次读取/);
+
+  const native = account('cursor', [{ kind: 'weekly', label: 'Included usage', usedPercent: 8, resetsAt: upcoming }]);
+  assert.deepEqual(quotaOverview([native], now, { ...sample, live: true })[2], quotaOverview([native], now)[2]);
+  assert.equal(quotaOverview([native], now, sample)[2].value, '92%');
+});
+
 test('retains DeepSeek currency and zero, and leaves an undocumented amount unknown', async () => {
   const { quotaOverview } = await overview;
   const wallet = (remaining, currency) => account('deepseek', [{ metric: 'credits', remaining, currency }]);

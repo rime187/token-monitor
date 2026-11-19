@@ -83,7 +83,7 @@ function reading(id, account, now) {
   return {value: unit + amount.toFixed(2), detail: `${currency} 账户余额`};
 }
 
-export function quotaOverview(rows, now = Date.now()) {
+export function quotaOverview(rows, now = Date.now(), cursorUsage = null) {
   return providers.map(([id, label, provider]) => {
     const accounts = rows.filter(row => row.provider === provider);
     const connected = accounts.filter(row => row.status !== 'notConfigured' && row.status !== 'disabled');
@@ -93,7 +93,14 @@ export function quotaOverview(rows, now = Date.now()) {
     }
     const account = ranked[0] || accounts[0];
     const status = account?.status || 'notConfigured';
-    const emptyHint = id === 'grok' ? '通过 Cursor 读取 X 共享额度'
+    if (id === 'grok' && cursorUsage && status !== 'disabled' &&
+        (status !== 'ok' || remaining(sharedWindow(account)) == null)) {
+      const {usedPercent, resetText, observedAt, live} = cursorUsage;
+      return {id, label, status: live ? 'ok' : 'cached', value: percent({usedPercent}),
+        detail: `X 共享周额 · ${resetText} 重置${live ? '' : ' · 上次读取'}`,
+        identity: '', updatedAt: observedAt};
+    }
+    const emptyHint = id === 'grok' ? '打开 Cursor 设置 → Plan & Usage'
       : id === 'deepseek' ? '连接 DeepSeek API 账户' : '可在额度详情查看连接状态';
     const data = status === 'ok' ? reading(id, account, now) : {
       value: states[status] || '暂不可用', detail: account?.actionRequired === 'accountVerification' ? '账户需要验证' : emptyHint
@@ -127,19 +134,23 @@ export function activate(ctx) {
 
       let snapshot;
       let source = context.source || 'local';
+      let visible = context.visible !== false;
+      let cursorUsage = null;
+      let syncing = false;
       let revision = 0;
       let closed = false;
       let stop;
       function render() {
         const local = source === 'local';
         const available = local && snapshot?.availability === 'available';
-        const rows = quotaOverview(available ? snapshot.rows : []);
+        const rows = quotaOverview(available ? snapshot.rows : [], Date.now(), local ? cursorUsage : null);
         list.replaceChildren(...rows.map(row => {
           const item = element('article', 'pq-row');
           item.dataset.provider = row.id;
-          item.dataset.ready = String(available && row.status === 'ok' && row.value !== '未知');
+          const present = available || (local && row.id === 'grok' && cursorUsage);
+          item.dataset.ready = String(Boolean(present && ['ok', 'cached'].includes(row.status) && row.value !== '未知'));
           let {value, detail} = row;
-          if (!available) {
+          if (!present) {
             value = local ? (snapshot ? '暂无数据' : '读取中') : '未显示';
             detail = local ? '等待本机额度快照' : '切换为本机数据查看';
           }
@@ -150,7 +161,7 @@ export function activate(ctx) {
           if (row.identity) hint.append(element('span', 'pq-identity', ' · ' + row.identity));
           const subline = element('div', 'pq-subline');
           subline.append(hint);
-          if (available && (updated || row.status === 'ok')) {
+          if (present && (updated || row.status === 'ok')) {
             const stamp = element('span', 'pq-stamp', updated ? `${updated} 采集` : '采集时间未知');
             subline.append(stamp);
           }
@@ -172,8 +183,26 @@ export function activate(ctx) {
           if (!closed && pending === revision) receive({availability: 'temporarilyUnavailable'});
         }
       }
+      async function syncCursor() {
+        if (closed || syncing || source !== 'local' || !visible || document.hidden) return;
+        syncing = true;
+        try {
+          if (!cursorUsage) {
+            cursorUsage = await ctx.backend.call('getCursorUsage');
+            if (cursorUsage && !closed) render();
+          }
+          cursorUsage = await ctx.backend.call('syncCursorUsage');
+        } catch {
+          if (cursorUsage) cursorUsage = {...cursorUsage, live: false};
+        } finally {
+          syncing = false;
+          if (!closed) render();
+        }
+      }
       render();
-      const clock = setInterval(render, 60_000);
+      void syncCursor();
+      document.addEventListener('visibilitychange', syncCursor);
+      const clock = setInterval(() => { render(); void syncCursor(); }, 60_000);
       ctx.data.subscribe(query, event => {
         if (closed) return;
         if (event.type === 'snapshot') { ++revision; receive(event.value); }
@@ -185,15 +214,23 @@ export function activate(ctx) {
         .catch(() => { if (!closed) receive({availability: 'temporarilyUnavailable'}); });
       return {
         update(next) {
+          const previousVisible = visible;
+          visible = next.visible !== false;
           const nextSource = next.source || 'local';
           if (source !== nextSource) {
             ++revision;
             source = nextSource;
             receive(null);
-            if (source === 'local') void refresh();
-          }
+            if (source === 'local') { void refresh(); void syncCursor(); }
+          } else if (!previousVisible && visible) void syncCursor();
         },
-        dispose() { closed = true; clearInterval(clock); stop?.(); panel.remove(); }
+        dispose() {
+          closed = true;
+          clearInterval(clock);
+          document.removeEventListener('visibilitychange', syncCursor);
+          stop?.();
+          panel.remove();
+        }
       };
     }
   };

@@ -4,7 +4,10 @@
 
 ## 接入账户
 
-打开右下角设置中的「AI 工具额度」。Codex 使用已登录的本机账号。Antigravity 可以读取正在运行的客户端，也可以在设置中连接 Google 账号。Grok Bot 使用与 The X Subscription 关联的 Cursor 账号。DeepSeek 需要 DSH 实际扣费账户的 API Key。ChatGPT iOS 普通聊天额度请在 ChatGPT 中查看。
+打开右下角设置中的「AI 工具额度」。Codex 使用已登录的本机账号。Antigravity 可以读取正在运行的客户端，也可以在设置中连接 Google 账号。ChatGPT iOS 普通聊天额度请在 ChatGPT 中查看。
+
+- **Grok Bot** 显示 The X Subscription 的共享额度。Windows 上，如果宿主尚未读到共享额度，在已登录同一订阅的 Cursor 中打开「Settings → Plan & Usage」。小窗首页显示时会读取该页上的每周已用百分比，换算为剩余百分比，并显示官方给出的重置日期。首页每分钟刷新一次。用量页关闭后，小窗保留数值、采集时间，并标为「上次读取」。
+- **DeepSeek** 使用 DSH 实际扣费账户的 API Key。在「AI 工具额度 → DeepSeek」保存一次后，首页会随宿主刷新，显示官方接口返回的币种和余额。可用 DSH 的「设置 → 账号与余额」核对。
 
 ## 修改和安装
 
@@ -19,4 +22,4 @@ New-Item -ItemType Directory -Path dist -Force | Out-Null
 node scripts/build-plugin-package.js plugins/personal-quota "dist/personal-quota-$version.tmplugin"
 ```
 
-在「设置 → 插件」导入新包，启用插件并将其设为首页内容。原版应用管理登录、刷新与数据存储；插件仅使用宿主提供的额度快照。
+在「设置 → 插件」导入新包，启用插件并将其设为首页内容。宿主管理 API Key 和额度快照。插件通过 Windows 辅助功能读取 Cursor 可见用量控件，只在插件自己的数据目录保存最近一次成功的读数。
