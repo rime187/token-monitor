@@ -30,22 +30,26 @@ function emptyWslBundle() {
   return { today: emptyPeriod(), month: emptyPeriod(), allTime: emptyPeriod() };
 }
 
-// Install-proof gate: reg.exe is read-only and cannot trigger a WSL install. If
-// the Lxss key is absent, reg exits non-zero and execFileSync throws -> false.
-function isWslInstalled(deps = {}) {
+// Only injected probes may run under node --test: even listing distros can
+// open the Windows WSL installer when a stale Lxss key exists.
+function hasWslRegistryEntry(deps, queryArgs) {
   const platform = deps.platform || process.platform;
-  if (platform !== 'win32') return false;
+  if (platform !== 'win32' || (process.env.NODE_TEST_CONTEXT && !deps.exec)) return false;
   const exec = deps.exec || defaultExec;
   try {
-    exec('reg', ['query', LXSS_KEY]);
+    exec('reg', ['query', LXSS_KEY, ...queryArgs]);
     return true;
   } catch (_) {
     return false;
   }
 }
 
+function isWslInstalled(deps = {}) {
+  return hasWslRegistryEntry(deps, []);
+}
+
 function listRunningWslDistros(deps = {}) {
-  if (!isWslInstalled(deps)) return [];
+  if (!hasWslRegistryEntry(deps, ['/s', '/v', 'DistributionName'])) return [];
   const exec = deps.exec || defaultExec;
   let out;
   try {
@@ -65,7 +69,7 @@ function wslHomePath(home, relativePath) {
   return `${home}\\${relativePath.replace(/\//g, '\\')}`;
 }
 
-function homeHasData(home, existsSync, readdirSync = fs.readdirSync) {
+function homeHasData(home, existsSync, readdirSync) {
   const ids = new Set();
   for (const rel of WSL_DATA_MARKERS) {
     if (existsSync(wslHomePath(home, rel))) {

@@ -83,7 +83,7 @@ Continuous Cursor imports must not block local collection; local scans merge onl
 
 ### WSL
 
-WSL scanning is opt-in; the widget preserves saved choices and the agent accepts `TOKEN_MONITOR_WSL_SCAN=1` or `--wslScan=true`. `src/shared/wslUsage.js` scans only running distros, serially, after checking the Windows WSL registry key; never start a stopped distro or invoke the install-prompt stub on a machine without WSL. Merge before deriving client status. WSL refreshes only on full ticks and remains frozen in `wslAnchor` between them, preserving exact native deltas; host watching does not extend into WSL.
+WSL scanning is opt-in. The widget preserves saved choices and the agent accepts `TOKEN_MONITOR_WSL_SCAN=1` or `--wslScan=true`. `src/shared/wslUsage.js` checks the Windows registry for a registered distribution before invoking `wsl.exe`, then scans only running distributions, serially. Windows can launch its WSL installer even for a listing request. Tests use injected command and filesystem implementations for WSL discovery, including reads of `\\wsl$` shares. Merge before deriving client status. WSL refreshes only on full ticks and remains frozen in `wslAnchor` between them, preserving exact native deltas; host watching does not extend into WSL.
 
 ### Subprocess lifecycle
 
@@ -130,7 +130,7 @@ The desktop records successful displayed quota observations in its own bounded h
 
 Routes are read per request, including MiMo exchange hops. Protected Chromium requests wait for proxy changes and connection cleanup; failed applies block those requests and remain retryable, and waits must support cancellation. Invalid persisted proxy URLs block traffic except for the retained bypasses. This setting does not cover external browser/CLI sign-ins, usage collection, Hub sync or GitHub release checks.
 
-Under Chromium, never set `Host`, keep `credentials: 'omit'` so browser cookies cannot shadow provider-managed cookies, and expect cross-origin `Referer` paths to be cancelled without a suitable `referrerPolicy`.
+Under Chromium, never set `Host`, keep `credentials: 'omit'` on shared transports so browser cookies cannot shadow provider-managed cookies, and expect cross-origin `Referer` paths to be cancelled without a suitable `referrerPolicy`. The explicit [Cursor web sign-in](providers/cursor.md#accounts-and-lifecycle) uses an isolated persistent session. Only allowlisted dashboard reads on `https://cursor.com` may include that session’s cookies. Its background transport rejects redirects. Neither the renderer nor the usage worker receives the cookies.
 
 ### Balance quotas
 

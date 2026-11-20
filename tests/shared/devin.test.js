@@ -228,23 +228,23 @@ maybe('Devin session metadata survives a minimal older schema', () => {
 
 test('WSL discovery recognizes the Devin CLI database and Desktop event dir', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
-  assert.deepEqual(homeHasData(home, () => false), []);
+  assert.deepEqual(homeHasData(home, () => false, () => []), []);
   assert.deepEqual(
-    homeHasData(home, (file) => file === `${home}\\.local\\share\\devin\\cli\\sessions.db`),
+    homeHasData(home, (file) => file === `${home}\\.local\\share\\devin\\cli\\sessions.db`, () => []),
     ['devin']
   );
   assert.deepEqual(
-    homeHasData(home, (file) => file === `${home}\\.config\\Devin\\User\\acp-events`),
+    homeHasData(home, (file) => file === `${home}\\.config\\Devin\\User\\acp-events`, () => []),
     ['devin']
   );
   // The Windows-shaped root needs the database itself — an empty cli dir is
   // not evidence Devin ever ran here.
   assert.deepEqual(
-    homeHasData(home, (file) => file === `${home}\\AppData\\Roaming\\devin\\cli`),
+    homeHasData(home, (file) => file === `${home}\\AppData\\Roaming\\devin\\cli`, () => []),
     []
   );
   assert.deepEqual(
-    homeHasData(home, (file) => file === `${home}\\AppData\\Roaming\\devin\\cli\\sessions.db`),
+    homeHasData(home, (file) => file === `${home}\\AppData\\Roaming\\devin\\cli\\sessions.db`, () => []),
     ['devin']
   );
 });

@@ -549,6 +549,35 @@ test('readCursorDesktopSignIn reports the desktop user, a signed-out desktop, an
   } finally { cleanup(); }
 });
 
+test('protected Cursor sessions follow desktop profile changes without importing credentials', async () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const { home, credPath, cleanup } = withTempHome();
+  const options = { home, platform: 'linux' };
+  const dir = path.join(home, '.config', 'Cursor', 'User', 'globalStorage');
+  fs.mkdirSync(dir, { recursive: true });
+  const db = new DatabaseSync(path.join(dir, 'state.vscdb'));
+  try {
+    db.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)');
+    const put = db.prepare('INSERT OR REPLACE INTO ItemTable VALUES (?, ?)');
+    put.run('cursor.storage.authTokenEncryptionAtRest', 'true');
+    put.run('cursorAuth/accessToken', 'protected-fixture');
+    for (const name of ['first', 'second']) {
+      const email = name + '@example.com';
+      const userId = 'user_' + name;
+      put.run('cursorAuth/cachedScopedProfile', JSON.stringify({ authId: 'auth0|' + userId }));
+      put.run('cursorAuth/cachedEmail', email);
+      assert.deepEqual(readCursorDesktopSignIn(options), { state: 'signed-in', userId, email });
+      assert.deepEqual(await runCursorDiscover(options), { discovered: false, reason: 'desktop-only' });
+      assert.equal(fs.existsSync(credPath), false);
+    }
+    put.run('cursorAuth/cachedScopedProfile', 'invalid');
+    assert.deepEqual(readCursorDesktopSignIn(options), { state: 'unknown' });
+    put.run('cursorAuth/cachedScopedProfile', '{"authId":"user_second"}');
+    db.exec("DELETE FROM ItemTable WHERE key = 'cursorAuth/accessToken'");
+    assert.deepEqual(readCursorDesktopSignIn(options), { state: 'signed-out' });
+  } finally { db.close(); cleanup(); }
+});
+
 test('desktop-detected Cursor accounts follow the desktop sign-in state', () => {
   const signedIn = { state: 'signed-in', userId: 'user_A' };
   assert.equal(isCursorDetectedAccountCurrent({ desktop: signedIn, userId: 'user_A' }), true);

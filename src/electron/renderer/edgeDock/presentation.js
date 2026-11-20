@@ -123,14 +123,22 @@
 
   function accountSummary(provider, options = {}) {
     const windowKey = options.windowKey || '';
-    const selection = trayText.compactLimitSelection(provider);
-    const chosenWindow = windowKey && provider?.status === 'ok' && !provider?.stale
-      ? dockItems.selectedLimitWindow(provider, windowKey, options)
-      : null;
-    const headline = windowKey
-      ? (chosenWindow && trayText.remainingPercent(chosenWindow, provider) !== null
-        ? { window: chosenWindow, remaining: trayText.remainingPercent(chosenWindow, provider) } : null)
-      : (headlinePick(selection) || balanceOnlyHeadline(provider));
+    let selection = null;
+    let headline = null;
+    if (windowKey || provider?.provider === 'antigravity') {
+      if (provider?.status === 'ok' && !provider.stale) {
+        const windows = windowKey
+          ? [dockItems.selectedLimitWindow(provider, windowKey, options)]
+          : dockItems.selectableLimitWindows(provider).filter((window) => /^Gemini\b/i.test(window.label || window.displayLabel));
+        for (const window of windows) {
+          const remaining = trayText.remainingPercent(window, provider);
+          if (remaining !== null && (!headline || remaining < headline.remaining)) headline = { window, remaining };
+        }
+      }
+    } else {
+      selection = trayText.compactLimitSelection(provider);
+      headline = headlinePick(selection) || balanceOnlyHeadline(provider);
+    }
     return {
       status: provider?.status === 'ok' && !provider?.stale ? 'ok' : (provider?.stale ? 'stale' : 'error'),
       planLabel: String(provider?.planLabel || provider?.accountLabel || ''),
@@ -141,9 +149,8 @@
       stale: provider?.stale === true,
       headlineRemaining: headline ? headline.remaining : null,
       headlineWindow: headline ? headline.window : null,
-      // Automatic mode warns for the tightest metered pool. A pinned window
-      // keeps both the number and its colour tied to that chosen pool.
-      severityPercent: windowKey ? (headline?.remaining ?? null) : (selection ? selection.tightestPercent : null),
+      // Pins and the automatic Gemini reading keep the ring and its colour on the same pool.
+      severityPercent: selection?.tightestPercent ?? headline?.remaining ?? null,
       // The automatic headline fell through to a money-only account: it has a
       // figure to print and no percentage to warn with. The cell picks this to
       // keep such an account selectable after the percentage comparison.

@@ -35,12 +35,12 @@ function credentialsPath(home = os.homedir()) {
   return path.join(home, '.config', 'tokscale', 'cursor-credentials.json');
 }
 
-function readCursorDesktopAccessToken(options = {}) {
+function readCursorDesktopSession(options = {}) {
   const fsApi = options.fs || fs;
   const dbPath = cursorDesktopStateCandidates(options).find((candidate) => {
     try { return fsApi.statSync(candidate).isFile(); } catch (_) { return false; }
   });
-  if (!dbPath) return null;
+  if (!dbPath) return { state: 'unknown' };
 
   let sqlite = options.sqlite;
   if (sqlite === undefined) {
@@ -54,12 +54,36 @@ function readCursorDesktopAccessToken(options = {}) {
 
   const database = new sqlite.DatabaseSync(dbPath, { readOnly: true });
   try {
-    const row = database.prepare('SELECT value FROM ItemTable WHERE key = ?').get(CURSOR_DESKTOP_TOKEN_KEY);
+    // Take one SQLite snapshot so a sign-out or account switch cannot pair
+    // a previous identity with the current session. Leave protected tokens in Cursor.
+    const row = database.prepare(`
+      SELECT CASE WHEN encryption.value = 'true' THEN NULL ELSE token.value END AS value,
+             encryption.value = 'true' AS encrypted, profile.value AS profile, email.value AS email
+      FROM ItemTable AS token
+      LEFT JOIN ItemTable AS encryption ON encryption.key = 'cursor.storage.authTokenEncryptionAtRest'
+      LEFT JOIN ItemTable AS profile ON profile.key = 'cursorAuth/cachedScopedProfile'
+      LEFT JOIN ItemTable AS email ON email.key = 'cursorAuth/cachedEmail'
+      WHERE token.key = ? AND length(trim(token.value)) > 0
+    `).get(CURSOR_DESKTOP_TOKEN_KEY);
+    if (row?.encrypted) {
+      let profile;
+      try { profile = JSON.parse(row.profile); } catch (_) { return { state: 'unknown' }; }
+      const userId = canonicalCursorUserId(profile?.authId);
+      if (!userId) return { state: 'unknown' };
+      const email = typeof row.email === 'string' ? row.email.trim() : '';
+      return { state: 'signed-in', userId, email: /^[^\s@]+@[^\s@]+$/.test(email) && email.length <= 254 ? email : '' };
+    }
     const token = typeof row?.value === 'string' ? row.value.trim() : '';
-    return token || null;
+    if (!token) return { state: 'signed-out' };
+    const userId = extractUserId(normalizeCursorSessionToken(token));
+    return userId ? { state: 'signed-in', userId, accessToken: token } : { state: 'unknown', accessToken: token };
   } finally {
     database.close();
   }
+}
+
+function readCursorDesktopAccessToken(options = {}) {
+  return readCursorDesktopSession(options).accessToken || null;
 }
 
 function deriveAccountId(token) {
@@ -341,20 +365,16 @@ async function runCursorLogin(token, {
 // current. 'unknown' when Cursor desktop has no state file here or it cannot be
 // read, so callers keep their accounts instead of hiding them.
 function readCursorDesktopSignIn(options = {}) {
-  const fsApi = options.fs || fs;
-  const hasState = cursorDesktopStateCandidates(options).some((candidate) => {
-    try { return fsApi.statSync(candidate).isFile(); } catch (_) { return false; }
-  });
-  if (!hasState) return { state: 'unknown' };
-  let accessToken;
-  try { accessToken = readCursorDesktopAccessToken(options); } catch (_) { return { state: 'unknown' }; }
-  if (!accessToken) return { state: 'signed-out' };
-  const userId = canonicalCursorUserId(extractUserId(normalizeCursorSessionToken(accessToken) || ''));
-  return userId ? { state: 'signed-in', userId } : { state: 'unknown' };
+  try {
+    const { state, userId, email } = readCursorDesktopSession(options);
+    if (state !== 'signed-in') return { state };
+    return email === undefined ? { state, userId } : { state, userId, email };
+  } catch (_) { return { state: 'unknown' }; }
 }
 
 async function runCursorDiscover(options = {}) {
-  const accessToken = readCursorDesktopAccessToken(options);
+  const { state, accessToken } = readCursorDesktopSession(options);
+  if (state === 'signed-in' && !accessToken) return { discovered: false, reason: 'desktop-only' };
   if (!accessToken) return { discovered: false, reason: 'not-signed-in' };
   const sessionToken = normalizeCursorSessionToken(accessToken);
   if (!sessionToken || !extractUserId(sessionToken)) {

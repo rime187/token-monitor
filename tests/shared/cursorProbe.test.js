@@ -15,8 +15,80 @@ const {
   parsePrepaidBilling,
   parseUsageSummary,
   parseUserInfo,
-  probe
+  probe,
+  readCursorWebIdentity
 } = require('../../src/shared/providers/cursor/probe');
+
+function cursorWebFixture(onRequest = () => undefined) {
+  const account = { id: 'user_web', email: 'web@example.com' };
+  const calls = [];
+  let linked = account;
+  const data = {
+    '/api/auth/me': { sub: 'auth0|user_web', email: account.email },
+    '/api/usage-summary': { individualUsage: { plan: { totalPercentUsed: 0 } } },
+    '/api/dashboard/get-plan-info': { isMerged: true, planInfo: {
+      includedUsagePeriod: 'INCLUDED_USAGE_PERIOD_WEEKLY', includedUsageResetsAt: '1795132800000'
+    } },
+    '/api/dashboard/get-sand-usage-status': { isUnified: true, usagePercent: 74 },
+    '/api/dashboard/get-user-prepaid-billing': { availableCents: '250' },
+    '/api/usage': {}
+  };
+  const deps = {
+    listAccounts: () => [],
+    getCursorWebAccount: () => linked,
+    cursorWebFetch: async (input, init) => {
+      const url = new URL(input);
+      assert.equal(url.origin, 'https://cursor.com');
+      assert.ok(Object.hasOwn(data, url.pathname));
+      assert.ok(init.signal instanceof AbortSignal);
+      assert.deepEqual(Object.keys(init.headers || {}), url.pathname.startsWith('/api/dashboard/') ? ['Content-Type'] : []);
+      calls.push(url.pathname);
+      return onRequest(url, calls) || Response.json(data[url.pathname]);
+    }
+  };
+  return { account, calls, deps, unlink() { linked = null; } };
+}
+
+test('a linked web session supplies weekly usage and prepaid balance via Cursor dashboard requests', async () => {
+  const { account, deps } = cursorWebFixture();
+  assert.deepEqual(await readCursorWebIdentity(deps.cursorWebFetch), { ok: true, account });
+  const row = await fetchCursorLimits({}, deps);
+  assert.equal(row.status, 'ok');
+  assert.equal(row.accountEmail, account.email);
+  assert.deepEqual(row.windows.map(w => [w.label, w.usedPercent ?? w.remaining]), [
+    ['Included usage', 74], ['Prepaid balance', 2.5]
+  ]);
+  assert.equal(row.windows[0].resetsAt, new Date(1795132800000).toISOString());
+});
+
+test('expired, switched, disabled and disconnected web accounts never publish another account’s usage', async () => {
+  const expired = cursorWebFixture(() => new Response(null, { status: 401 }));
+  assert.equal((await fetchCursorLimits({}, expired.deps)).status, 'unauthorized');
+  assert.deepEqual(expired.calls, ['/api/auth/me']);
+  const switched = cursorWebFixture((url, calls) => url.pathname === '/api/auth/me' && calls.length > 1
+    ? Response.json({ sub: 'user_other', email: 'other@example.com' }) : undefined);
+  const wrong = await fetchCursorLimits({}, switched.deps);
+  assert.equal(wrong.status, 'unauthorized');
+  assert.deepEqual(wrong.windows, []);
+  const disabled = cursorWebFixture();
+  assert.equal((await fetchCursorLimits({ cursorDisabledAccountIds: ['user_web'] }, disabled.deps)).status, 'notConfigured');
+  assert.deepEqual(disabled.calls, []);
+  const unlinked = cursorWebFixture((url) => {
+    if (url.pathname === '/api/usage-summary') unlinked.unlink();
+  });
+  assert.equal((await fetchCursorLimits({}, unlinked.deps)).removed, true);
+});
+
+test('web and saved credentials for one Cursor account produce one quota identity', async () => {
+  const { account, deps } = cursorWebFixture();
+  deps.listAccounts = () => [{ id: account.id, sessionToken: 'fixture' }];
+  const rows = await fetchCursorLimits({ cursorManualAccountIds: [account.id] }, {
+    ...deps, probe: async () => ({ ok: false, error: { kind: 'unauthorized' } })
+  });
+  assert.equal(rows.status, 'ok');
+  assert.equal(rows.accountEmail, account.email);
+  assert.equal(rows.windows[0].usedPercent, 74);
+});
 
 test('parseUsageSummary maps cents to USD and reads billing cycle end', () => {
   const input = {

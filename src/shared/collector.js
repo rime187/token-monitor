@@ -1099,6 +1099,7 @@ async function collectUsageOnce(options) {
     const selectedSyncClients = targetRequested ? targetClientsCsv : normalizedClients;
     const syncClients = cursorSnapshot ? withoutCursor(selectedSyncClients) : selectedSyncClients;
     await maybeSyncCursor(syncClients, options.logger, {
+      syncCursorWebUsage: options.syncCursorWebUsage,
       minIntervalMs: selfSyncThrottle.minIntervalForTick(options, 'cursor'),
       explicit: selfSyncSelected(options.forceSelfSync, 'cursor'),
       signal: options.signal,
@@ -2863,6 +2864,7 @@ function startCollector(options) {
     context: { day: localTodayKey(collectionDate(options.now)), pricing: pricingRevision, calendar: collectionCalendarKey(collectionDate(options.now)) },
     sync: (syncOptions) => maybeSyncCursor('cursor', log, {
       ...syncOptions,
+      syncCursorWebUsage: options.syncCursorWebUsage,
       terminationOptions: options.subprocessTerminationOptions,
       onTerminationUnconfirmed: () => emitDiagnosticEvent({ subsystem: 'collector', code: 'subprocess-termination-unconfirmed', operation: 'cursor-sync' })
     }),

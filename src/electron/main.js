@@ -266,6 +266,15 @@ const {
 } = require('../shared/appUpdater');
 const cursorAuth = require('../shared/providers/cursor/auth');
 const cursorProbe = require('../shared/providers/cursor/probe');
+const { createCursorWebSession } = require('./providers/cursor/webSession');
+const { syncCursorWebUsage } = require('../shared/providers/cursor/webUsage');
+const cursorWeb = createCursorWebSession({
+  fromPartition: (partition) => session.fromPartition(partition),
+  BrowserWindow,
+  WebContentsView,
+  readIdentity: (...args) => cursorProbe.readCursorWebIdentity(...args),
+  getProxyConfig: () => sessionProxyConfig(settings || {})
+});
 const { stepfunToken } = require('../shared/providers/stepfun/limits');
 const opencodeWeb = require('../shared/providers/opencode/web');
 const opencodeGoApi = require('../shared/providers/opencode/goApi');
@@ -797,6 +806,7 @@ function defaultSettings() {
     limitsRefreshMode: normalizeLimitsRefreshMode(process.env.TOKEN_MONITOR_LIMITS_REFRESH_MODE),
     limitsRefreshMs: normalizeLimitsRefreshMs(process.env.TOKEN_MONITOR_LIMITS_REFRESH_MS),
     cursorManualAccountIds: [],
+    cursorWebAccount: null,
     showLimitSource: parseBoolean(process.env.TOKEN_MONITOR_SHOW_LIMIT_SOURCE, false),
     maskLimitAccountEmails: false,
     limitsHistoryOpenMode: 'hover',
@@ -1069,6 +1079,8 @@ function credentialProbeDeps(renewed = {}) {
 
 function electronLimitsDeps() {
   return {
+    getCursorWebAccount: () => settings?.cursorWebAccount,
+    cursorWebFetch: cursorWeb.fetch,
     fetch: electronLimitsFetch(),
     mimoExchangeFetch: ensureMimoExchangeFetch(),
     museWebFetch: ensureMimoExchangeFetch(),
@@ -2894,6 +2906,9 @@ function readSettings() {
     merged.vendorColors = migrateVendorColors(merged.vendorColors);
     merged.cursorDisabledAccountIds = normalizeCursorDisabledAccountIds(merged.cursorDisabledAccountIds);
     merged.cursorManualAccountIds = normalizeCursorAccountIds(merged.cursorManualAccountIds);
+    const webAccount = merged.cursorWebAccount;
+    merged.cursorWebAccount = typeof webAccount?.id === 'string' && /^user_[A-Za-z0-9_]{1,200}$/.test(webAccount.id)
+      ? { id: webAccount.id, email: typeof webAccount.email === 'string' ? webAccount.email : '' } : null;
     merged.hubHostPort = normalizeHubPort(merged.hubHostPort);
     merged.hubHostSecret = typeof merged.hubHostSecret === 'string' ? merged.hubHostSecret : '';
     delete merged.workbuddyEndpoint;
@@ -3107,6 +3122,10 @@ function createElectronUsageRuntime(options) {
   };
   latestUsageHost = createUsageHost({
     ...options,
+    syncCursorWebUsage: ({ signal }) => {
+      const account = settings?.cursorWebAccount;
+      return account ? syncCursorWebUsage(cursorWeb.fetch, { accountId: account.id, allTimeSince: settings.allTimeSince, signal }) : false;
+    },
     onUpdate: releaseOnWorkerDelivery(options.onUpdate),
     ...(options.onPreview ? { onPreview: releaseOnWorkerDelivery(options.onPreview) } : {})
   }, {
@@ -5695,6 +5714,7 @@ function focusExistingWindow() {
   applyMacActivationPolicy({ mainWindowVisible: true });
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow();
+    if (settings?.trayMode) showPopover();
     return;
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -5843,6 +5863,7 @@ function settingsForRenderer() {
     expose: ['hubHostSecret', 'secret']
   });
   const rendererSettings = { ...settings };
+  delete rendererSettings.cursorWebAccount;
   delete rendererSettings.icloudRetiredDeviceIds;
   delete rendererSettings.icloudWriterId;
   delete rendererSettings.syncContentState;
@@ -6516,6 +6537,7 @@ function ensureEdgeDockController() {
     // The dock card's Switch button runs the same swap the Limits view does,
     // then repaints from the refreshed records.
     onSwitchCodexAccount: (accountId) => switchCodexAccountFromEdgeDock(accountId),
+    onOpenHome: () => openViewFromTray('home'),
     canRefreshLimits: () => canRefreshEdgeDockStats(),
     onRefreshLimits: () => refreshStatsFromEdgeDock(),
     onRefreshLimitAccount: (providerId, account) => refreshLimitProvider(providerId, account),
@@ -8057,9 +8079,9 @@ function replaceMainWindow(bounds, options = {}) {
       if (windowsBackdropFallback(old) !== windowsBackdropFallback(next)) pushSettingsToRenderer();
       sendFloatingBubbleState();
       if (old?.isMinimized()) next.minimize();
-      else if (old?.isVisible()) {
+      else if (old?.isVisible() || options.focus === true) {
         restoreWindowMaximized(next, settings, { collapsedFloatingBubble: options.collapsedFloatingBubble === true });
-        revealWindow(next, { inactive: options.focus === false || !wasFocused });
+        revealWindow(next, { inactive: options.focus === false || (!wasFocused && options.focus !== true) });
       }
       if (!next.isVisible() || next.isMinimized()) {
         old?.destroy();
@@ -8176,6 +8198,13 @@ function normalizeManualCookie(input) {
   return cursorAuth.normalizeCursorSessionToken(input);
 }
 
+function refreshCursorConnection(reason) {
+  cursorStatusCache = { value: null, at: 0 };
+  deviceRuntimeHandle?.reconfigureLimits(electronLimitsConfig());
+  void queueLimitInvalidation({ provider: 'cursor' }, reason, { clear: true });
+  bestEffortTrackedUsageRefresh('cursor', { forceSync: true });
+}
+
 async function cursorStatusValue({ discover = false } = {}) {
   const managementBlocked = isExternalAgentActive();
   let accounts = cursorAuth.listAccounts();
@@ -8186,21 +8215,29 @@ async function cursorStatusValue({ discover = false } = {}) {
   const disabled = new Set(normalizeCursorDisabledAccountIds(settings?.cursorDisabledAccountIds));
   const manual = new Set(normalizeCursorAccountIds(settings?.cursorManualAccountIds));
   const desktop = cursorAuth.readCursorDesktopSignIn();
+  const webAccount = settings?.cursorWebAccount;
+  if (webAccount) {
+    accounts = accounts.filter(account => cursorAuth.canonicalCursorUserId(account.userId || account.id) !== webAccount.id);
+    accounts.push(webAccount);
+  }
   const listedAccounts = await Promise.all(accounts.map(async (account) => {
-    const probeResult = await cursorProbe.probe(account.sessionToken);
+    const web = account === webAccount;
+    const probeResult = web ? await cursorProbe.probeCursorWebAccount(account, cursorWeb.fetch)
+      : await cursorProbe.probe(account.sessionToken);
     const expired = !probeResult.ok && probeResult.error?.kind === 'unauthorized';
     // Desktop-detected accounts follow the desktop sign-in; manual ones stay
     // until removed. Hidden accounts keep their credentials and usage history.
-    if (!manual.has(account.id) && !isCursorDetectedAccountCurrent({
+    if (!web && !manual.has(account.id) && !isCursorDetectedAccountCurrent({
       desktop,
       userId: cursorAuth.canonicalCursorUserId(account.userId || account.id),
       unauthorized: expired
     })) return null;
     return {
       id: account.id,
+      web,
       enabled: !disabled.has(account.id),
-      removable: manual.has(account.id),
-      email: probeResult.ok ? probeResult.user?.email || '' : '',
+      removable: web || manual.has(account.id),
+      email: (probeResult.ok && probeResult.user?.email) || (web ? account.email : ''),
       label: account.label || '',
       membershipType: probeResult.ok ? probeResult.usage.membershipType || '' : '',
       expired,
@@ -8208,9 +8245,13 @@ async function cursorStatusValue({ discover = false } = {}) {
     };
   }));
   const safeAccounts = listedAccounts.filter(Boolean);
+  const desktopAlreadyListed = safeAccounts.some((account) =>
+    cursorAuth.canonicalCursorUserId(account.id) === desktop.userId
+    || (account.email && desktop.email && account.email.toLowerCase() === desktop.email.toLowerCase()));
   return {
     loggedIn: safeAccounts.length > 0,
     accounts: safeAccounts,
+    desktopAccount: desktop.email !== undefined && !desktopAlreadyListed ? { email: desktop.email } : null,
     linkedCount: safeAccounts.filter((account) => account.enabled && !account.expired && !account.error).length,
     managementBlocked
   };
@@ -8458,6 +8499,7 @@ app.whenReady().then(() => {
     const normalizedPatch = { ...patch, currency: normalizedCurrency };
     // Only Cursor's explicit account lifecycle can assign manual ownership.
     delete normalizedPatch.cursorManualAccountIds;
+    delete normalizedPatch.cursorWebAccount;
     delete normalizedPatch.windowMaximized;
     delete normalizedPatch.workbuddyEndpoint;
     delete normalizedPatch.workbuddyLocalAppEnabled;
@@ -9167,6 +9209,22 @@ app.whenReady().then(() => {
   ipcMain.handle('appUpdate:download', () => downloadAndPrepareAppUpdate());
   ipcMain.handle('appUpdate:install', () => installDownloadedAppUpdate());
   ipcMain.handle('appUpdate:dismiss', (_event, version) => dismissAppUpdateVersion(version));
+  ipcMain.handle('cursor:loginWeb', async (event) => {
+    if (event.sender !== mainWindow?.webContents || event.senderFrame !== event.sender.mainFrame) {
+      return { ok: false, error: 'Open Cursor sign-in from Token Monitor settings.' };
+    }
+    if (isExternalAgentActive()) return { ok: false, code: 'EXTERNAL_AGENT_ACTIVE', error: CURSOR_EXTERNAL_AGENT_ERROR };
+    try {
+      const result = await cursorWeb.login();
+      if (!result.ok) return result;
+      settings.cursorWebAccount = result.account;
+      settings.cursorDisabledAccountIds = normalizeCursorDisabledAccountIds(settings.cursorDisabledAccountIds)
+        .filter(id => id !== result.account.id);
+      saveSettings({ throwOnError: true });
+      refreshCursorConnection('login');
+      return { ok: true, status: await cursorStatusValue() };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
   ipcMain.handle('cursor:loginManual', async (_event, raw) => {
     if (isExternalAgentActive()) {
       return { ok: false, code: 'EXTERNAL_AGENT_ACTIVE', error: CURSOR_EXTERNAL_AGENT_ERROR };
@@ -9185,10 +9243,7 @@ app.whenReady().then(() => {
         accountId
       ]);
       saveSettings({ throwOnError: true });
-      deviceRuntimeHandle?.reconfigureLimits(electronLimitsConfig());
-      cursorStatusCache = { value: null, at: 0 };
-      void queueLimitInvalidation({ provider: 'cursor' }, 'login', { clear: true });
-      bestEffortTrackedUsageRefresh('cursor', { forceSync: true });
+      refreshCursorConnection('login');
       return { ok: true, email: probeResult.user.email, status: await cursorStatusValue() };
     } catch (err) {
       return { ok: false, error: err.message };
@@ -9242,7 +9297,7 @@ app.whenReady().then(() => {
   ipcMain.handle('cursor:setAccountEnabled', async (_event, accountId, enabled) => {
     try {
       const id = String(accountId || '').trim();
-      if (!id || !cursorAuth.listAccounts().some((account) => account.id === id)) {
+      if (!id || (settings.cursorWebAccount?.id !== id && !cursorAuth.listAccounts().some((account) => account.id === id))) {
         return { ok: false, error: 'Cursor account not found' };
       }
       const disabled = new Set(normalizeCursorDisabledAccountIds(settings.cursorDisabledAccountIds));
@@ -9265,6 +9320,13 @@ app.whenReady().then(() => {
     try {
       const removeId = String(accountId || '').trim();
       const manual = new Set(normalizeCursorAccountIds(settings.cursorManualAccountIds));
+      if (removeId && removeId === settings.cursorWebAccount?.id) {
+        await cursorWeb.disconnect();
+        settings.cursorWebAccount = null;
+        saveSettings({ throwOnError: true });
+        refreshCursorConnection('logout');
+        return { ok: true, status: await cursorStatusValue() };
+      }
       if (!removeId || !manual.has(removeId)) {
         return { ok: false, error: 'Only manually added Cursor accounts can be removed' };
       }
@@ -9274,10 +9336,7 @@ app.whenReady().then(() => {
       settings.cursorDisabledAccountIds = disabled;
       settings.cursorManualAccountIds = [...manual].filter((id) => id !== removeId);
       saveSettings({ throwOnError: true });
-      deviceRuntimeHandle?.reconfigureLimits(electronLimitsConfig());
-      cursorStatusCache = { value: null, at: 0 };
-      void queueLimitInvalidation({ provider: 'cursor' }, 'logout', { clear: true });
-      bestEffortTrackedUsageRefresh('cursor', { forceSync: true });
+      refreshCursorConnection('logout');
       return { ok: true, status: await cursorStatusValue() };
     } catch (err) {
       return { ok: false, error: err.message };

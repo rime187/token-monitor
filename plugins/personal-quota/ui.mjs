@@ -41,9 +41,16 @@ function sharedWindow(row) {
   return row.windows.find(w => w.label === 'Included usage' && ['weekly', 'billing'].includes(w.kind));
 }
 
+function hasGeminiQuota(w) {
+  return /^Gemini\b/i.test(w.label || w.displayLabel) && w.showMeter !== false && remaining(w) != null;
+}
+
 function accountRank(row, id) {
   if (id === 'codex') return row.sourceDetail === 'managed' ? 0 : 1;
-  if (id === 'antigravity') return row.source === 'rpc' ? 1 : 0;
+  if (id === 'antigravity') {
+    const hasQuota = row.status === 'ok' && row.windows.some(hasGeminiQuota);
+    return (hasQuota ? 2 : 0) + (row.source === 'rpc' ? 1 : 0);
+  }
   if (id === 'grok') return sharedWindow(row) ? 1 : 0;
   return 0;
 }
@@ -63,10 +70,10 @@ function reading(id, account, now) {
     };
   }
   if (id === 'antigravity') {
-    const lowest = windows.filter(w => remaining(w) != null)
+    const lowest = windows.filter(hasGeminiQuota)
       .sort((a, b) => remaining(a) - remaining(b))[0];
-    if (!lowest) return {value: '未知', detail: '未返回模型组剩余百分比'};
-    const group = (lowest.label || lowest.displayLabel || '模型组')
+    if (!lowest) return {value: '未知', detail: '未返回 Gemini 剩余额度'};
+    const group = (lowest.label || lowest.displayLabel)
       .replace(/\s+5-hour$/i, ' 5h').replace(/\s+weekly$/i, ' 周');
     return {value: percent(lowest), detail: `${group} · ${resetText(lowest, now)}`};
   }

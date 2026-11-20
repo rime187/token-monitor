@@ -218,6 +218,31 @@ test('pointer-activated window controls clear sticky focus without blurring keyb
   assert.match(windowHandlers, /if \(event\.detail > 0\) els\.closeButton\.blur\(\)/);
 });
 
+test('the titlebar X dismisses Settings before closing the window', () => {
+  const app = readRendererFile('app.js');
+  const start = app.indexOf("els.closeButton.addEventListener('click'");
+  const end = app.indexOf("els.trendsPanel.addEventListener('click'", start);
+  const calls = [];
+  let settingsOpen = true;
+  let click;
+  require('node:vm').runInNewContext(app.slice(start, end), {
+    els: {
+      closeButton: {
+        addEventListener: (_, handler) => { click = handler; },
+        blur: () => calls.push('blur')
+      },
+      settingsButton: { click: () => { settingsOpen = false; calls.push('settings'); } }
+    },
+    isSettingsPanelOpen: () => settingsOpen,
+    window: { tokenMonitor: { close: () => calls.push('window') } }
+  });
+
+  click({ detail: 1 });
+  assert.deepEqual(calls, ['blur', 'settings']);
+  click({ detail: 0 });
+  assert.deepEqual(calls, ['blur', 'settings', 'window']);
+});
+
 test('Refresh discloses to the left of Settings on hover and keyboard focus', () => {
   const css = readRendererFile('styles.css');
   const group = cssRule(css, '.utility-actions');

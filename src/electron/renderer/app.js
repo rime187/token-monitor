@@ -6212,6 +6212,7 @@ function openSettingsPanel(section) {
 
 function openViewFromTray(viewId) {
   if (!availableBreakdownIds().includes(viewId)) return;
+  initialBreakdownPreferenceApplied = true;
   if (state.viewSwitcherOpen) setViewSwitcherOpen(false);
   stopWindowShortcutRecording();
   resetSettingsListSearch();
@@ -10204,7 +10205,6 @@ function syncSettingsForm() {
   renderMimoStatus();
   renderCopilotStatus();
   renderViewPreferences();
-  renderToolPreferences();
   renderLimitProviderCheckboxes();
   renderSettingsSummaries();
   renderOpenCodeProfiles();
@@ -12156,6 +12156,8 @@ function toolPreferenceRenderSignature() {
     query: toolPreferenceQuery(),
     deviceId: device?.deviceId || '',
     clientStatus,
+    cursorMissingLabel: clientStatusPresentationApi.clientStatusTag('cursor', 'missing', state.cursorAccount.status).key,
+    cursorTrackingBlock: clientStatusPresentationApi.cursorTrackingBlockReason(state.cursorAccount.status, enabledClientSet().has('cursor')),
     healthRows: KNOWN_CLIENTS.map(({ id }) => [
       id,
       health?.clients?.[id]?.overall || '',
@@ -12241,7 +12243,7 @@ function renderToolPreferencesNow() {
         ? { key: 'settings.tools.status.attention', tone: 'warn' }
         : id === 'qoder'
           ? { key: qoderTracking.mixed ? 'settings.tools.qoder.partial' : 'settings.tools.qoder.all', tone: 'ok' }
-          : clientStatusPresentationApi.clientStatusTag(id, clientStatus[id] || 'waiting');
+          : clientStatusPresentationApi.clientStatusTag(id, clientStatus[id] || 'waiting', state.cursorAccount.status);
       if (tagInfo) {
         const tag = document.createElement('span');
         tag.className = `tool-status-tag tool-status-tag-${tagInfo.tone}`;
@@ -12258,6 +12260,14 @@ function renderToolPreferencesNow() {
     trackInput.dataset.preference = id === 'qoder' ? 'track-group' : 'track';
     trackInput.checked = id === 'qoder' ? qoderTracking.checked : enabled.has(id);
     trackInput.indeterminate = id === 'qoder' && qoderTracking.mixed;
+    if (id === 'cursor') {
+      const reason = clientStatusPresentationApi.cursorTrackingBlockReason(state.cursorAccount.status, trackInput.checked);
+      if (reason) {
+        trackInput.disabled = true;
+        trackInput.setAttribute('aria-description', t(reason));
+        row.classList.add('disabled');
+      }
+    }
     trackInput.setAttribute('aria-label', t('settings.tools.trackClient', { name: label }));
     trackInput.addEventListener('change', id === 'qoder' ? () => onQoderTrackingToggle(trackInput.checked) : onToolTrackingToggle);
     // The drag handle is gone, so the checkbox carries the keyboard reorder
@@ -14471,10 +14481,6 @@ function bindSettingsListSearch(input, apply) {
 bindSettingsListSearch(els.clientDisplaySearchInput, (value) => {
   state.toolSearchQuery = value;
   renderToolPreferences();
-  // The Cursor row's checkbox is disabled from the account status, which is
-  // re-applied by the status render rather than by the list render. Filtering
-  // re-creates that row outside a stats tick, so re-apply it here too.
-  renderCursorStatus();
 });
 
 bindSettingsListSearch(els.limitProviderSearchInput, (value) => {
@@ -15036,6 +15042,10 @@ els.minButton.addEventListener('click', (event) => {
 });
 els.closeButton.addEventListener('click', (event) => {
   if (event.detail > 0) els.closeButton.blur();
+  if (isSettingsPanelOpen()) {
+    els.settingsButton.click();
+    return;
+  }
   window.tokenMonitor.close();
 });
 els.trendsPanel.addEventListener('click', (event) => {
@@ -19125,6 +19135,13 @@ function renderCursorStatus() {
   const listEl = document.getElementById('cursorAccountList');
   const errorEl = document.getElementById('cursorErrorMessage');
   if (!statusEl || !listEl || !errorEl) return;
+  renderToolPreferences();
+  const webLogin = document.getElementById('cursorWebLogin');
+  const signingIn = state.cursorWebLoginBusy === true;
+  if (webLogin) {
+    webLogin.disabled = signingIn || state.cursorAccount.busy || state.cursorAccount.status?.managementBlocked === true;
+    webLogin.textContent = t(signingIn ? 'settings.cursor.webLoginWaiting' : 'settings.cursor.webLogin');
+  }
 
   accountShellApi.render({
     error: errorEl,
@@ -19135,7 +19152,6 @@ function renderCursorStatus() {
 
   if (state.cursorAccount.error) {
     setCursorStatusText(statusEl, t('settings.common.error'));
-    setCursorCheckboxesEnabled(Boolean(state.cursorAccount.status?.accounts?.length));
     setSettingsSectionExpanded('limits', true);
     setCursorAccountExpanded(true);
     renderSettingsSummaries();
@@ -19153,14 +19169,27 @@ function renderCursorStatus() {
   const managementBlocked = status.managementBlocked === true;
   document.getElementById('cursorAgentActiveNote')?.classList.toggle('hidden', !managementBlocked);
   const addButton = document.getElementById('cursorAddAccountButton');
-  if (addButton) addButton.disabled = managementBlocked;
-  const summary = accounts.length === 0
-    ? t('settings.cursor.notLoggedIn')
-    : t('settings.cursor.connected', { linked: status.linkedCount || 0, total: accounts.length });
+  if (addButton) addButton.disabled = managementBlocked || signingIn;
+  const manualPanel = document.getElementById('cursorManualPanel');
+  if (manualPanel) manualPanel.inert = managementBlocked || signingIn;
+  const summary = accounts.length > 0
+    ? t('settings.cursor.connected', { linked: status.linkedCount || 0, total: accounts.length })
+    : t(status.desktopAccount ? 'settings.cursor.desktopDetected' : 'settings.cursor.notLoggedIn');
   setCursorStatusText(statusEl, summary);
-  setCursorCheckboxesEnabled(accounts.some((account) => !account.expired && !account.error));
   listEl.replaceChildren();
-  if (accounts.length === 0) {
+  if (status.desktopAccount) {
+    if (status.desktopAccount.email) {
+      const identity = document.createElement('div');
+      identity.className = 'managed-account-email';
+      identity.textContent = status.desktopAccount.email;
+      listEl.append(identity);
+    }
+    const note = document.createElement('p');
+    note.className = 'settings-note';
+    note.textContent = t('settings.cursor.desktopUsageNote');
+    listEl.append(note);
+  }
+  if (accounts.length === 0 && !status.desktopAccount) {
     const empty = document.createElement('p');
     empty.className = 'settings-note';
     empty.textContent = t('settings.cursor.empty');
@@ -19177,6 +19206,7 @@ function renderCursorStatus() {
       input.className = 'managed-account-checkbox';
       input.type = 'checkbox';
       input.checked = enabled;
+      input.disabled = signingIn;
       input.setAttribute('aria-label', t('settings.cursor.toggleAccount', { account: accountName }));
       const main = document.createElement('div');
       main.className = 'managed-account-main';
@@ -19187,8 +19217,7 @@ function renderCursorStatus() {
       const planLabel = account.membershipType
         ? limitProviderPresentationApi.limitProviderDisplayLabel(account.membershipType)
         : t('settings.cursor.webAccount');
-      input.addEventListener('change', async () => {
-        input.disabled = true;
+      input.addEventListener('change', () => accountProfileSaves.run('cursor', input, async () => {
         const result = await window.tokenMonitor.cursor.setAccountEnabled(account.id, input.checked);
         if (!result?.ok) {
           state.cursorAccount = { ...state.cursorAccount, error: result?.error || t('settings.cursor.toggleFailed') };
@@ -19197,7 +19226,7 @@ function renderCursorStatus() {
           refreshStats({ force: true }).catch(() => {});
         }
         renderCursorStatus();
-      });
+      }));
       const right = document.createElement('span');
       right.className = 'managed-account-right';
       const info = document.createElement('div');
@@ -19211,14 +19240,14 @@ function renderCursorStatus() {
             : planLabel;
       info.setAttribute('aria-label', info.textContent);
       right.append(info);
-      if (account.removable === true && !managementBlocked) {
+      if (account.removable === true && !managementBlocked && !signingIn) {
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'managed-account-remove';
         remove.textContent = '✕';
         remove.setAttribute('aria-label', t('settings.cursor.remove'));
         let confirmingRemove = false;
-        remove.addEventListener('click', async () => {
+        remove.addEventListener('click', () => accountProfileSaves.run('cursor', remove, async () => {
           if (!confirmingRemove) {
             confirmingRemove = true;
             remove.classList.add('confirming');
@@ -19226,7 +19255,6 @@ function renderCursorStatus() {
             remove.setAttribute('aria-label', t('settings.cursor.removeConfirm', { account: accountName }));
             return;
           }
-          remove.disabled = true;
           const result = await window.tokenMonitor.cursor.logout(account.id);
           if (!result?.ok) {
             const message = result?.code === 'EXTERNAL_AGENT_ACTIVE'
@@ -19238,7 +19266,7 @@ function renderCursorStatus() {
             refreshStats({ force: true }).catch(() => {});
           }
           renderCursorStatus();
-        });
+        }));
         right.append(remove);
       }
       row.append(input, main, right);
@@ -19249,6 +19277,7 @@ function renderCursorStatus() {
 }
 
 async function refreshCursorStatus({ force = false, discover = false } = {}) {
+  if (state.cursorWebLoginBusy) return;
   setAccountShellError('cursor', '');
   state.cursorAccount = { status: null, error: '', busy: true };
   renderCursorStatus();
@@ -19259,16 +19288,6 @@ async function refreshCursorStatus({ force = false, discover = false } = {}) {
     state.cursorAccount = { status: null, error: err.message, busy: false };
   }
   renderCursorStatus();
-}
-
-function setCursorCheckboxesEnabled(enabled) {
-  const row = document.querySelector('#clientDisplayList .tool-preference-row[data-client="cursor"]');
-  const input = row?.querySelector('input[data-preference="track"]');
-  row?.classList.toggle('disabled', !enabled);
-  if (input) {
-    input.disabled = !enabled;
-    input.setAttribute('aria-description', enabled ? '' : t('settings.cursor.loginRequired'));
-  }
 }
 
 let openCustomPricingForm = null;
@@ -19706,6 +19725,30 @@ function setupCursorAccountUI() {
     setCursorManualExpanded(cursorManualDetails?.classList.contains('hidden'));
   });
   setCursorManualExpanded(false);
+
+  const cursorWebLogin = document.getElementById('cursorWebLogin');
+  cursorWebLogin.addEventListener('click', () => accountProfileSaves.run('cursor', null, async () => {
+    if (state.cursorAccount.busy || state.cursorAccount.status?.managementBlocked) return;
+    state.cursorWebLoginBusy = true;
+    state.cursorAccount.error = '';
+    setAccountShellError('cursor', '');
+    renderCursorStatus();
+    try {
+      const result = await window.tokenMonitor.cursor.loginWeb();
+      if (result.ok) {
+        state.cursorAccount = { status: result.status, error: '', busy: false };
+        refreshStats({ force: true }).catch(() => {});
+      } else if (result.code !== 'CANCELLED') {
+        const message = result.code === 'EXTERNAL_AGENT_ACTIVE' ? t('settings.cursor.agentActive') : result.error;
+        setAccountShellError('cursor', t('settings.cursor.loginFailed', { message }));
+      }
+    } catch (error) {
+      setAccountShellError('cursor', t('settings.cursor.loginFailed', { message: error.message }));
+    } finally {
+      state.cursorWebLoginBusy = false;
+      renderCursorStatus();
+    }
+  }));
 
   document.getElementById('cursorLoginButton').addEventListener('click', () => {
     window.tokenMonitor.openExternal('https://cursor.com');

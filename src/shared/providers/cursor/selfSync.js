@@ -26,13 +26,28 @@ function createCursorSelfSync({ selfSyncThrottle }) {
     options.signal?.addEventListener('abort', cancelAttempt, { once: true });
     if (options.signal?.aborted) cancelAttempt();
     try {
-      await cursorAuth.runCursorSync({
-        signal: options.signal,
-        timeoutMs: options.timeoutMs ?? (options.explicit === true
-          ? cursorAuth.CURSOR_EXPLICIT_SYNC_TIMEOUT_MS : cursorAuth.CURSOR_BACKGROUND_SYNC_TIMEOUT_MS),
-        terminationOptions: options.terminationOptions,
-        onTerminationUnconfirmed: options.onTerminationUnconfirmed
-      });
+      let webAccount;
+      let webError;
+      try {
+        webAccount = await options.syncCursorWebUsage?.({ signal: options.signal });
+      } catch (error) {
+        throwIfAborted(options.signal);
+        webError = error;
+      }
+      const needsNative = !webAccount && !webError
+        || cursorAuth.listAccounts().some(account => account.id !== webAccount);
+      if (needsNative) {
+        try {
+          await cursorAuth.runCursorSync({
+            signal: options.signal,
+            timeoutMs: options.timeoutMs ?? (options.explicit === true
+              ? cursorAuth.CURSOR_EXPLICIT_SYNC_TIMEOUT_MS : cursorAuth.CURSOR_BACKGROUND_SYNC_TIMEOUT_MS),
+            terminationOptions: options.terminationOptions,
+            onTerminationUnconfirmed: options.onTerminationUnconfirmed
+          });
+        } catch (error) { throw webError || error; }
+      }
+      if (webError) throw webError;
       selfSyncThrottle.completeAttempt('cursor', attempt, false);
     } catch (err) {
       if (options.signal?.aborted) {

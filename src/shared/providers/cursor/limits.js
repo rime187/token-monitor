@@ -138,7 +138,7 @@ function cursorOnDemandWindow(usage, resetsAt) {
   });
 }
 
-async function fetchCursorAccountLimits(account, deps = {}) {
+async function fetchCursorAccountLimits(account, deps = {}, webSession = false) {
   const nowMs = (deps.now || Date.now)();
   const updatedAt = new Date(nowMs).toISOString();
   const probe = deps.probe || cursorProbe.probe;
@@ -154,13 +154,15 @@ async function fetchCursorAccountLimits(account, deps = {}) {
     };
   }
 
-  const result = await probe(account.sessionToken, deps);
+  const result = webSession
+    ? await cursorProbe.probeCursorWebAccount(account, deps.cursorWebFetch, deps)
+    : await probe(account.sessionToken, deps);
   if (!result.ok) {
     const kind = result.error?.kind === 'unauthorized' ? 'unauthorized' : 'unavailable';
     return {
       provider: 'cursor',
       accountKey: hashCursorAccountKey(account),
-      accountLabel: account.label || '',
+      accountLabel: account.email || account.label || '',
       status: kind,
       source: 'web',
       updatedAt,
@@ -273,14 +275,13 @@ async function fetchCursorLimits(options = {}, deps = {}) {
   } else {
     accounts = cursorAuth.listAccounts();
   }
-  if (!Array.isArray(accounts) || accounts.length === 0) {
-    return fetchCursorAccountLimits(null, deps);
-  }
+  const webAccount = deps.getCursorWebAccount?.();
   const disabled = new Set((Array.isArray(options.cursorDisabledAccountIds) ? options.cursorDisabledAccountIds : [])
     .map((id) => String(id || '').trim())
     .filter(Boolean));
-  const enabledAccounts = accounts.filter((account) => !disabled.has(account.id));
-  if (enabledAccounts.length === 0) return fetchCursorAccountLimits(null, deps);
+  const enabledAccounts = (Array.isArray(accounts) ? accounts : []).filter((account) => !disabled.has(account.id));
+  const useWeb = webAccount && !disabled.has(webAccount.id);
+  if (enabledAccounts.length === 0 && !useWeb) return fetchCursorAccountLimits(null, deps);
   // Electron supplies manual ownership; headless callers without that metadata
   // retain their existing saved-account behavior.
   const manual = Array.isArray(options.cursorManualAccountIds) ? new Set(options.cursorManualAccountIds) : null;
@@ -293,13 +294,24 @@ async function fetchCursorLimits(options = {}, deps = {}) {
   // Omission would leave a retained LimitsRuntime identity behind. The marker
   // retires only its quota row, never the stored credential or usage history.
   const removed = account => ({ provider: 'cursor', accountKey: hashCursorAccountKey(account), removed: true });
-  const providers = await Promise.all(enabledAccounts.map(account => current(account)
-    ? fetchCursorAccountLimits(account, deps) : removed(account)));
+  const [providers, webRow] = await Promise.all([
+    Promise.all(enabledAccounts.map(account => current(account)
+      ? fetchCursorAccountLimits(account, deps) : removed(account))),
+    useWeb ? fetchCursorAccountLimits(webAccount, deps, true) : null
+  ]);
   // Recheck after every probe settles: even a completed account can become stale
   // while a slower sibling is still fetching.
   const rows = providers.map((provider, index) => provider.removed
     || current(enabledAccounts[index], provider.status === 'unauthorized')
     ? provider : removed(enabledAccounts[index]));
+  if (webRow) {
+    const duplicate = rows.findIndex(row => row.accountKey === webRow.accountKey);
+    const stillLinked = deps.getCursorWebAccount()?.id === webAccount.id;
+    if (duplicate === -1) rows.push(stillLinked ? webRow : removed(webAccount));
+    else if (stillLinked && (rows[duplicate].removed || (rows[duplicate].status !== 'ok' && webRow.status === 'ok'))) {
+      rows[duplicate] = webRow;
+    }
+  }
   return rows.length === 1 ? rows[0] : rows;
 }
 

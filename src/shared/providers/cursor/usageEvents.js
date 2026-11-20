@@ -68,6 +68,7 @@ function cacheFiles(dir, fsImpl) {
   // Tokscale scans exactly these names in the live directory; archived copies
   // carry a label and a timestamp instead.
   add(dir, false, /^usage(?:\.[^/\\]+)?\.json$/);
+  add(path.join(dir, 'web'), false, /^usage\.account-[a-f0-9]{64}\.json$/);
   add(path.join(dir, 'archive'), true, /^usage.*\.json$/);
   return files.sort((left, right) => left.filePath.localeCompare(right.filePath));
 }

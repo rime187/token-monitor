@@ -44,6 +44,7 @@ const CALLER_OPTION_KEYS = Object.freeze([
   'onPreview',
   'onError',
   'onDiagnosticEvent',
+  'syncCursorWebUsage',
   'logger',
   'dailyHistoryArchiveWriteEnabled',
   'startBarrier'
@@ -99,6 +100,7 @@ function createUsageHostCoordinator(deps = {}) {
       archiveWritesYieldToAgent,
       liveSubprocesses: createLiveSubprocessTable(),
       callbacks: {
+        ...(options.syncCursorWebUsage ? { cursorWebUsage: true } : {}),
         ...(typeof options.onSessionActivity === 'function' ? { activity: true } : {}),
         preview: typeof options.onPreview === 'function',
         error: typeof options.onError === 'function',
@@ -107,6 +109,7 @@ function createUsageHostCoordinator(deps = {}) {
     };
 
     let worker = null;
+    let webUsageController = null;
     let collector = null;
     let stopped = false;
     let terminating = false;
@@ -175,6 +178,22 @@ function createUsageHostCoordinator(deps = {}) {
     function onMessage(message) {
       if (message?.diagnostics !== undefined) diagnostics = message.diagnostics;
       switch (message?.type) {
+        case 'cursorWebUsage': {
+          if (stopped || !options.syncCursorWebUsage) {
+            worker?.postMessage({ type: 'cursorWebUsageResult', id: message.id, error: 'Cursor web sync stopped' });
+            return;
+          }
+          const controller = new AbortController();
+          webUsageController = controller;
+          Promise.resolve().then(() => options.syncCursorWebUsage({ signal: controller.signal }))
+            .then(value => worker?.postMessage({ type: 'cursorWebUsageResult', id: message.id, value }),
+              error => worker?.postMessage({ type: 'cursorWebUsageResult', id: message.id, error: error.message }))
+            .finally(() => { if (webUsageController === controller) webUsageController = null; });
+          return;
+        }
+        case 'cancelCursorWebUsage':
+          webUsageController?.abort();
+          return;
         case 'activity':
           if (stopped) return;
           notify(options.onSessionActivity, message.patch);
@@ -222,6 +241,7 @@ function createUsageHostCoordinator(deps = {}) {
     }
 
     function onExit(code) {
+      webUsageController?.abort();
       if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
       worker = null;
       // A worker that finished its stop has already terminated its
@@ -329,6 +349,7 @@ function createUsageHostCoordinator(deps = {}) {
       stop(stopOptions = {}) {
         if (stopped) return;
         stopped = true;
+        webUsageController?.abort();
         if (collector) {
           collector.stop(stopOptions);
           return;

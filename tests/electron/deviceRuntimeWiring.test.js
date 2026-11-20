@@ -35,9 +35,9 @@ test('targeted rescans stay strict while Cursor credential refresh is best effor
   );
   // Login and logout must both request a refresh; future credential actions may
   // legitimately add more best-effort call sites without weakening this policy.
-  assert.ok(
-    (main.match(/bestEffortTrackedUsageRefresh\('cursor', \{ forceSync: true \}\)/g) || []).length >= 2
-  );
+  assert.match(main, /function refreshCursorConnection\(reason\)[\s\S]*?bestEffortTrackedUsageRefresh\('cursor', \{ forceSync: true \}\)/);
+  assert.equal(main.match(/refreshCursorConnection\('login'\)/g)?.length, 2);
+  assert.equal(main.match(/refreshCursorConnection\('logout'\)/g)?.length, 2);
   assert.match(
     main,
     /function bestEffortTrackedUsageRefresh[\s\S]*settings\?\.hubMode !== 'icloud'[\s\S]*!canRefreshUsageRuntime\(mode, isExternalAgentActive\)/

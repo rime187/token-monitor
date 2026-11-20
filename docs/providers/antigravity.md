@@ -122,6 +122,8 @@ Older model-config responses are pooled into compatible fallback windows (`Gemin
 
 The Limits page and Edge Dock preserve the existing Gemini and Claude/GPT quota pairs, then append the separate Gemini 4 Argon group. A weekly-only Argon allowance spans the full row. Apply this ordering in the shared renderer rather than changing normalized window order; an unavailable bucket must not gain an invented percentage or meter.
 
+The Edge Dock's automatic ring shows the lowest measured remaining percentage across Gemini pools, including Gemini 4 Argon. When none has a reading, the ring shows `--`. Selecting a specific window in Dock settings overrides the automatic choice.
+
 ### Identity and aggregation
 
 Managed OAuth accounts use a normalized Google email to derive their stable `accountKey`. An identified local RPC row uses the same derivation, allowing RPC/OAuth deduplication and cross-device collapse for the same account.

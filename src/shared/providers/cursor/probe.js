@@ -335,22 +335,34 @@ function requestJson(url, sessionToken, {
 async function probe(sessionToken, opts = {}) {
   if (!sessionToken) return { ok: false, error: { kind: 'unauthorized', message: 'no session token' } };
   const configuredTimeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 15000;
+  const get = (url) => requestJson(url, sessionToken, opts);
+  const rpc = (url) => dashboardRpc(url, sessionToken, opts, configuredTimeoutMs);
+  const readPeriod = () => {
+    const accessToken = sessionAccessToken(sessionToken);
+    if (!accessToken) return null;
+    const timeoutMs = Math.min(configuredTimeoutMs, SAND_TIMEOUT_MS);
+    return runWithProbeDeadline(({ signal }) => requestJson(CURRENT_PERIOD_USAGE_URL, sessionToken, {
+      ...opts, signal, timeoutMs, method: 'POST', body: '{}',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
+      bearerToken: accessToken
+    }), { signal: opts.signal, deadlineMs: timeoutMs }).catch(() => null);
+  };
+  return probeDashboard(get, rpc, get(AUTH_ME_URL), readPeriod);
+}
+
+async function probeDashboard(get, rpc, identity, readPeriod) {
   // Grok Bot and plan info are best effort: neither may fail the account row.
-  const grokBotResultPromise = dashboardRpc(SAND_USAGE_URL, sessionToken, opts, configuredTimeoutMs);
-  const planInfoResultPromise = dashboardRpc(PLAN_INFO_URL, sessionToken, opts, configuredTimeoutMs);
-  const [usageResult, userResult] = await Promise.all([
-    requestJson(USAGE_SUMMARY_URL, sessionToken, opts),
-    requestJson(AUTH_ME_URL, sessionToken, opts)
+  const [usageResult, userResult, grokBotResult, planInfoResult] = await Promise.all([
+    get(USAGE_SUMMARY_URL), identity, rpc(SAND_USAGE_URL), rpc(PLAN_INFO_URL)
   ]);
   if (!usageResult.ok) return usageResult;
   const user = userResult.ok ? parseUserInfo(userResult.json) : { email: null, name: null, sub: null };
   let requestUsage = null;
   if (user.sub) {
     const url = `${REQUEST_USAGE_URL}?user=${encodeURIComponent(user.sub)}`;
-    const requestUsageResult = await requestJson(url, sessionToken, opts);
+    const requestUsageResult = await get(url);
     if (requestUsageResult.ok) requestUsage = requestUsageResult.json;
   }
-  const [grokBotResult, planInfoResult] = await Promise.all([grokBotResultPromise, planInfoResultPromise]);
   const grokBot = grokBotResult.ok ? parseGrokBotUsage(grokBotResult.json) : null;
   const planInfo = planInfoResult.ok ? parsePlanInfo(planInfoResult.json) : null;
   const unifiedPlan = planInfo ? planInfo.isMerged : grokBot?.isUnified === true;
@@ -360,25 +372,8 @@ async function probe(sessionToken, opts = {}) {
   let prepaid = null;
   let periodPercent = null;
   if (unifiedPlan) {
-    const accessToken = sessionAccessToken(sessionToken);
-    const periodTimeoutMs = Math.min(configuredTimeoutMs, SAND_TIMEOUT_MS);
     const [prepaidResult, periodResult] = await Promise.all([
-      dashboardRpc(PREPAID_BILLING_URL, sessionToken, opts, configuredTimeoutMs),
-      accessToken
-        ? runWithProbeDeadline(({ signal }) => requestJson(CURRENT_PERIOD_USAGE_URL, sessionToken, {
-          ...opts,
-          signal,
-          timeoutMs: periodTimeoutMs,
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            'Connect-Protocol-Version': '1'
-          },
-          body: '{}',
-          bearerToken: accessToken
-        }), { signal: opts.signal, deadlineMs: periodTimeoutMs }).catch(() => null)
-        : Promise.resolve(null)
+      rpc(PREPAID_BILLING_URL), readPeriod?.()
     ]);
     if (prepaidResult.ok) prepaid = parsePrepaidBilling(prepaidResult.json);
     if (periodResult?.ok) periodPercent = parseCurrentPeriodUsage(periodResult.json).totalPercentUsed;
@@ -393,6 +388,60 @@ async function probe(sessionToken, opts = {}) {
   return { ok: true, usage, user };
 }
 
+async function requestWebJson(fetchWeb, url, { signal, timeoutMs = 15000 } = {}, post = false) {
+  try {
+    return await runWithProbeDeadline(async ({ signal: requestSignal }) => {
+      const res = await fetchWeb(url, post ? {
+        signal: requestSignal, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      } : { signal: requestSignal });
+      if (res.status === 204 && url === AUTH_ME_URL) {
+        return { ok: false, error: { kind: 'unauthorized', message: 'No signed-in Cursor account' } };
+      }
+      if (!res.ok) {
+        const kind = res.status === 401 || res.status === 403 ? 'unauthorized' : 'network';
+        return { ok: false, error: { kind, message: `HTTP ${res.status}` } };
+      }
+      try { return { ok: true, json: await res.json() }; }
+      catch (_) { return { ok: false, error: { kind: 'parse', message: 'Invalid Cursor dashboard response' } }; }
+    }, { signal, deadlineMs: post ? Math.min(SAND_TIMEOUT_MS, timeoutMs) : timeoutMs });
+  } catch (_) {
+    if (signal?.aborted) throw abortError(signal);
+    return { ok: false, error: { kind: 'network', message: 'Could not reach Cursor dashboard' } };
+  }
+}
+
+function webIdentity(result) {
+  if (!result.ok) return result;
+  const { sub, email } = parseUserInfo(result.json);
+  const id = /(?:^|\|)(user_[A-Za-z0-9_]+)$/.exec(sub || '')?.[1];
+  if (!id) return { ok: false, error: { kind: 'unauthorized', message: 'No signed-in Cursor account' } };
+  return { ok: true, account: { id, email: email || '' } };
+}
+
+async function readCursorWebIdentity(fetchWeb, opts = {}) {
+  const reply = await requestWebJson(fetchWeb, AUTH_ME_URL, opts);
+  const identity = webIdentity(reply);
+  if (!identity.ok) return identity;
+  const created = reply.json.created_at;
+  const ms = typeof created === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(created) ? Date.parse(created) : NaN;
+  return Number.isFinite(ms) ? { ...identity, createdAtMs: ms } : identity;
+}
+
+async function probeCursorWebAccount(account, fetchWeb, opts = {}) {
+  const get = (url) => requestWebJson(fetchWeb, url, opts);
+  const identity = await get(AUTH_ME_URL);
+  const first = webIdentity(identity);
+  if (!first.ok) return first;
+  const changed = { ok: false, error: { kind: 'unauthorized', message: 'Cursor web account changed' } };
+  if (first.account.id !== account.id) return changed;
+  const result = await probeDashboard(get, (url) => requestWebJson(fetchWeb, url, opts, true), identity);
+  if (!result.ok) return result;
+  // The browser can sign out or switch accounts while a batch is in flight.
+  const last = await readCursorWebIdentity(fetchWeb, opts);
+  if (!last.ok) return last;
+  return last.account.id === account.id ? result : changed;
+}
+
 module.exports = {
   parseUsageSummary,
   parseRequestUsage,
@@ -402,6 +451,8 @@ module.exports = {
   parseCurrentPeriodUsage,
   parseUserInfo,
   probe,
+  readCursorWebIdentity,
+  probeCursorWebAccount,
   requestJson,
   USAGE_SUMMARY_URL,
   AUTH_ME_URL,

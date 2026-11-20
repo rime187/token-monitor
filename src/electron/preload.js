@@ -194,6 +194,7 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
   },
   setTrayIcons: (icons) => ipcRenderer.invoke('tray:setIcons', icons),
   cursor: {
+    loginWeb: () => ipcRenderer.invoke('cursor:loginWeb'),
     loginManual: (token) => ipcRenderer.invoke('cursor:loginManual', token),
     setAccountEnabled: (accountId, enabled) => ipcRenderer.invoke('cursor:setAccountEnabled', accountId, enabled),
     logout: (accountId) => ipcRenderer.invoke('cursor:logout', accountId),

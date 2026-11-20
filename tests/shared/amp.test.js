@@ -114,7 +114,7 @@ test('Amp supports custom Tokscale roots and WSL discovery', () => {
   );
   const home = String.raw`\\wsl$\Ubuntu\home\u`;
   assert.deepEqual(
-    homeHasData(home, (candidate) => candidate === `${home}\\.local\\share\\amp\\threads`),
+    homeHasData(home, (candidate) => candidate === `${home}\\.local\\share\\amp\\threads`, () => []),
     ['amp']
   );
 });

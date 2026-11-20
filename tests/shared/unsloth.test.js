@@ -107,6 +107,6 @@ test('Unsloth keeps local zero cost and metered estimates in the same client par
 test('WSL discovery requires the Unsloth database, not just its runtime directory', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   const dir = `${home}\\.unsloth\\studio`;
-  assert.deepEqual(homeHasData(home, (file) => file === dir), []);
-  assert.deepEqual(homeHasData(home, (file) => file === `${dir}\\studio.db`), ['unsloth']);
+  assert.deepEqual(homeHasData(home, (file) => file === dir, () => []), []);
+  assert.deepEqual(homeHasData(home, (file) => file === `${dir}\\studio.db`, () => []), ['unsloth']);
 });

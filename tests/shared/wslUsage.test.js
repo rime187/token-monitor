@@ -6,6 +6,7 @@ const test = require('node:test');
 const {
   isWslInstalled,
   listRunningWslDistros,
+  probeWslState,
   emptyWslBundle,
   wslUsageHomes,
   homeHasData,
@@ -22,7 +23,7 @@ test('homeHasData returns the client ids whose markers are present', () => {
     `${home}\\.zcode\\cli\\db`
   ]);
   const existsSync = (p) => present.has(p);
-  const ids = homeHasData(home, existsSync);
+  const ids = homeHasData(home, existsSync, () => []);
   assert.deepEqual([...ids].sort(), ['codex', 'goose', 'hermes', 'opencode', 'zcode']);
 });
 
@@ -87,27 +88,27 @@ test('native-only Copilot WSL home is discovered and its usage is collected', as
 test('homeHasData maps an alternate-root marker to its client id', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   const present = new Set([`${home}\\.kimi-code\\sessions`]);
-  const ids = homeHasData(home, (p) => present.has(p));
+  const ids = homeHasData(home, (p) => present.has(p), () => []);
   assert.deepEqual([...ids], ['kimi']);
 });
 
 test('homeHasData detects Muse sessions in a WSL home', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   const marker = `${home}\\.local\\share\\muse\\sessions`;
-  assert.deepEqual(homeHasData(home, (path) => path === marker), ['muse']);
+  assert.deepEqual(homeHasData(home, (path) => path === marker, () => []), ['muse']);
 });
 
 test('homeHasData detects fx sessions in a WSL home', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   const marker = `${home}\\.fx\\sessions`;
-  assert.deepEqual(homeHasData(home, (path) => path === marker), ['fx']);
+  assert.deepEqual(homeHasData(home, (path) => path === marker, () => []), ['fx']);
 });
 
 test('homeHasData detects MiniMax Code runtime stores in a WSL home', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   for (const dir of ['.minimax', '.mavis']) {
     const marker = `${home}\\${dir}\\v2\\sessions`;
-    assert.deepEqual(homeHasData(home, (path) => path === marker), ['mcode']);
+    assert.deepEqual(homeHasData(home, (path) => path === marker, () => []), ['mcode']);
   }
 });
 
@@ -129,21 +130,21 @@ test('homeHasData attributes Kilo CLI and extension markers to one client', () =
     '.config\\Code\\User\\globalStorage\\kilocode.kilo-code\\tasks',
     '.vscode-server\\data\\User\\globalStorage\\kilocode.kilo-code\\tasks'
   ]) {
-    assert.deepEqual(homeHasData(home, (p) => p === `${home}\\${marker}`), ['kilo']);
+    assert.deepEqual(homeHasData(home, (p) => p === `${home}\\${marker}`, () => []), ['kilo']);
   }
 });
 
 test('homeHasData maps Proma agent sessions to proma', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   const present = new Set([`${home}\\.proma\\agent-sessions`]);
-  const ids = homeHasData(home, (p) => present.has(p));
+  const ids = homeHasData(home, (p) => present.has(p), () => []);
   assert.deepEqual(ids, ['proma']);
 });
 
 test('homeHasData maps LM Studio server logs to lmstudio', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   const present = new Set([`${home}\\.lmstudio\\server-logs`]);
-  assert.deepEqual(homeHasData(home, (p) => present.has(p)), ['lmstudio']);
+  assert.deepEqual(homeHasData(home, (p) => present.has(p), () => []), ['lmstudio']);
 });
 
 test('homeHasData maps VS Code Copilot workspace storage to copilot', () => {
@@ -154,14 +155,14 @@ test('homeHasData maps VS Code Copilot workspace storage to copilot', () => {
 });
 
 test('homeHasData returns empty array when no markers present', () => {
-  const ids = homeHasData('\\\\wsl$\\Ubuntu\\home\\u', () => false);
+  const ids = homeHasData('\\\\wsl$\\Ubuntu\\home\\u', () => false, () => []);
   assert.deepEqual(ids, []);
 });
 
 test('WSL marker discovery deliberately excludes Reasonix', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   const reasonixStats = `${home}\\.reasonix\\stats`;
-  assert.deepEqual(homeHasData(home, (p) => p === reasonixStats), []);
+  assert.deepEqual(homeHasData(home, (p) => p === reasonixStats, () => []), []);
 });
 
 test('isWslInstalled is false on non-win32 without calling exec', () => {
@@ -169,6 +170,17 @@ test('isWslInstalled is false on non-win32 without calling exec', () => {
   const ok = isWslInstalled({ platform: 'darwin', exec: () => { called = true; return ''; } });
   assert.equal(ok, false);
   assert.equal(called, false);
+});
+
+test('a Windows probe under node --test never invokes host commands', t => {
+  const run = t.mock.method(require('node:child_process'), 'execFileSync', () => Buffer.alloc(0));
+  const file = require.resolve('../../src/shared/wslUsage');
+  const original = require.cache[file];
+  delete require.cache[file];
+  t.after(() => { require.cache[file] = original; });
+  const { probeWslState } = require(file);
+  assert.equal(probeWslState({ platform: 'win32' }), 'not-installed');
+  assert.equal(run.mock.callCount(), 0);
 });
 
 test('isWslInstalled false when reg query throws (key missing)', () => {
@@ -189,6 +201,20 @@ test('listRunningWslDistros never calls wsl.exe when WSL not installed', () => {
   });
   assert.deepEqual(out, []);
   assert.deepEqual(calls, ['reg']); // reg only, wsl.exe never reached
+});
+
+test('an empty Lxss registry key reports not-running without invoking WSL', () => {
+  const calls = [];
+  const state = probeWslState({
+    platform: 'win32',
+    exec: (cmd, args) => {
+      calls.push(cmd);
+      if (args.includes('DistributionName')) throw new Error('no matching registry value');
+      return '';
+    }
+  });
+  assert.equal(state, 'not-running');
+  assert.deepEqual(calls, ['reg', 'reg']);
 });
 
 test('listRunningWslDistros parses running names when installed', () => {
@@ -306,7 +332,7 @@ test('wslUsageHomes keeps a home whose only data is VS Code Copilot Chat', () =>
 test('homeHasData attributes a CLI-only Antigravity home to antigravity', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\alice';
   const existsSync = (p) => p === `${home}\\.gemini\\antigravity-cli\\conversations`;
-  assert.deepEqual(homeHasData(home, existsSync), ['antigravity']);
+  assert.deepEqual(homeHasData(home, existsSync, () => []), ['antigravity']);
 });
 
 // A home holding only an alternate-root client (Claude transcripts, Kimi Code,

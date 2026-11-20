@@ -3,7 +3,7 @@
   "id": "personal-quota",
   "name": "我的 AI 额度",
   "description": "在首页查看 Codex、Antigravity、Grok Bot 的剩余额度和 DeepSeek API 余额。",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "ui": "ui.mjs",
   "backend": "backend.cjs",
   "css": ["panel.css"],

@@ -318,7 +318,7 @@ test('Reasonix stats path is shared by watcher and client health', () => {
 
 test('WSL Reasonix is neither discovered nor passed to the WSL Tokscale scan', async () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\alice';
-  assert.deepEqual(homeHasData(home, (value) => value === `${home}\\.reasonix\\stats`), []);
+  assert.deepEqual(homeHasData(home, (value) => value === `${home}\\.reasonix\\stats`, () => []), []);
   const calls = [];
   const { detected } = await collectWslUsage({
     clients: 'reasonix,claude',

@@ -25,7 +25,7 @@ test('keeps four slots and distinguishes absent, inaccessible and exhausted quot
   assert.deepEqual(rows.map(row => row.value), ['需要登录', '查询受限', '0%', '暂不可用']);
 });
 
-test('shows both Codex windows from one account and the limiting Antigravity model group', async () => {
+test('shows both Codex windows from one account and the limiting Gemini window', async () => {
   const { quotaOverview } = await overview;
   const [codex, antigravity] = quotaOverview([
     account('codex', [
@@ -36,14 +36,39 @@ test('shows both Codex windows from one account and the limiting Antigravity mod
     account('codex', [{ kind: 'weekly', remainingPercent: 99 }], { sourceDetail: 'managed' }),
     account('antigravity', [
       { kind: 'weekly', label: 'Unknown group', remainingPercent: null },
-      { kind: 'weekly', label: 'Gemini', remainingPercent: 84, resetsAt: upcoming },
+      { kind: 'weekly', label: 'Gemini weekly', remainingPercent: 84, resetsAt: upcoming },
+      { kind: 'session', label: 'Gemini 5-hour', remainingPercent: 91 },
       { kind: 'session', label: 'Claude / GPT', usedPercent: 85, resetsAt: '2026-11-18T12:00:00Z' }
     ])
   ], now);
   assert.match(codex.value, /5h 60%.*周 22%/);
   assert.match(codex.detail, /周 重置时间未知/);
-  assert.equal(antigravity.value, '15%');
-  assert.match(antigravity.detail, /Claude \/ GPT.*待刷新/);
+  assert.equal(antigravity.value, '84%');
+  assert.match(antigravity.detail, /Gemini 周.*重置/);
+});
+
+test('Antigravity shows only measurable Gemini pools and keeps the account and reset together', async () => {
+  const { quotaOverview } = await overview;
+  const row = (...accounts) => quotaOverview(accounts, now)[1];
+  const local = account('antigravity', [
+    { label: 'Claude/GPT weekly', remainingPercent: 1 },
+    { label: 'Gemini weekly', remainingPercent: null },
+    { label: 'Gemini 5-hour', remainingPercent: 0, showMeter: false }
+  ], { source: 'rpc' });
+  const other = account('antigravity', [
+    { label: 'Gemini Pro', remainingPercent: 33 },
+    { label: 'Gemini 4 Argon weekly', usedPercent: 100, resetsAt: upcoming },
+    { label: 'Claude', usedPercent: 100 }
+  ], { source: 'oauth', accountLabel: 'Work' });
+  assert.equal(row(local).value, '未知');
+  assert.match(row(local).detail, /Gemini/);
+  const selected = row(local, other);
+  assert.equal(selected.value, '0%');
+  assert.equal(selected.identity, 'Work');
+  assert.match(selected.detail, /Gemini 4 Argon 周.*重置/);
+  const personal = account('antigravity', [{ label: 'Gemini Flash', usedPercent: 20 }], { source: 'rpc' });
+  assert.equal(row(other, personal).value, '80%');
+  assert.equal(row(other, { ...other, accountLabel: 'Second' }).value, '多个账号');
 });
 
 test('only the confirmed Cursor included pool represents The X Subscription', async () => {

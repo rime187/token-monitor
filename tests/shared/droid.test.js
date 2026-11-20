@@ -53,7 +53,7 @@ test('Droid supports custom Tokscale roots and WSL discovery', () => {
   );
   const home = String.raw`\\wsl$\Ubuntu\home\u`;
   assert.deepEqual(
-    homeHasData(home, (candidate) => candidate === `${home}\\.factory\\sessions`),
+    homeHasData(home, (candidate) => candidate === `${home}\\.factory\\sessions`, () => []),
     ['droid']
   );
 });

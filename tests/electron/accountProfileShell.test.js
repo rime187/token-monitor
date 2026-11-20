@@ -283,10 +283,52 @@ test('profile list isolates providers and ignores stale failures and hidden resp
   assert.equal(harness.state.openrouterProfileCount, -1);
 });
 
+test('Cursor web login waits for one user session and publishes the connected account', async () => {
+  const button = { addEventListener(type, handler) { this[type] = handler; } };
+  const state = { cursorAccount: { status: { managementBlocked: true } } };
+  const requests = [];
+  let error;
+  let refreshed = 0;
+  const source = app.slice(app.indexOf('  const cursorWebLogin ='), app.indexOf("  document.getElementById('cursorLoginButton').addEventListener"));
+  vm.runInNewContext(source, {
+    document: { getElementById: () => button }, state, accountProfileSaves: accountShellApi.createBusyGuard(),
+    renderCursorStatus() {}, t, setAccountShellError: (_id, value) => { error = value; },
+    refreshStats: async () => { refreshed++; },
+    window: { tokenMonitor: { cursor: { loginWeb() {
+      const request = deferred();
+      requests.push(request);
+      return request.promise;
+    } } } }
+  });
+  await button.click();
+  assert.equal(requests.length, 0);
+  state.cursorAccount.status.managementBlocked = false;
+  const cancelled = button.click();
+  await button.click();
+  assert.equal(requests.length, 1);
+  assert.equal(state.cursorWebLoginBusy, true);
+  requests[0].resolve({ ok: false, code: 'CANCELLED' });
+  await cancelled;
+  assert.equal(error, '');
+  assert.equal(state.cursorWebLoginBusy, false);
+  const failed = button.click();
+  requests[1].resolve({ ok: false, code: 'EXTERNAL_AGENT_ACTIVE' });
+  await failed;
+  assert.equal(error, t('settings.cursor.loginFailed', { message: t('settings.cursor.agentActive') }));
+  const success = button.click();
+  const status = { accounts: [{ id: 'web', web: true, removable: true }], linkedCount: 1 };
+  requests[2].resolve({ ok: true, status });
+  await success;
+  assert.equal(state.cursorAccount.status, status);
+  assert.equal(state.cursorWebLoginBusy, false);
+  assert.equal(refreshed, 1);
+  assert.equal(error, '');
+});
+
 test('Cursor retires a failed manual login message when status is refreshed', async () => {
   const errors = { textContent: '', classList: { hidden: false, toggle(name, value) { if (name === 'hidden') this.hidden = value; } } };
   const statusPill = { textContent: '', title: '' };
-  const accountList = { children: [], replaceChildren() { this.children = []; }, append(node) { this.children.push(node); } };
+  const accountList = { children: [], replaceChildren() { this.children = []; }, append(...nodes) { this.children.push(...nodes); } };
   const manualInput = { value: 'bad session' };
   const manualSubmit = { addEventListener(type, handler) { if (type === 'click') this.click = handler; } };
   const elements = {
@@ -306,9 +348,9 @@ test('Cursor retires a failed manual login message when status is refreshed', as
     accountProfileSaves: accountShellApi.createBusyGuard(),
     isSettingsSurfaceVisible: () => true,
     setCursorStatusText: (element, value) => { element.textContent = value; element.title = value; },
-    setCursorCheckboxesEnabled() {},
+    renderToolPreferences() {},
     renderSettingsSummaries() {},
-    t: (key, values) => values?.message ? `${key}: ${values.message}` : key,
+    t: (key, values) => values?.message ? `${key}: ${values.message}` : t(key, values),
     document: {
       getElementById: (id) => elements[id] || null,
       createElement: () => ({ className: '', textContent: '', classList: { toggle() {} }, setAttribute() {}, addEventListener() {}, append() {} })
@@ -319,7 +361,7 @@ test('Cursor retires a failed manual login message when status is refreshed', as
     } } }
   };
   const shellErrorSource = app.slice(app.indexOf('function setAccountShellError('), app.indexOf('const { clientColors, fallbackModelColors'));
-  const renderSource = app.slice(app.indexOf('function renderCursorStatus('), app.indexOf('function setCursorCheckboxesEnabled('));
+  const renderSource = app.slice(app.indexOf('function renderCursorStatus('), app.indexOf('let openCustomPricingForm'));
   const submitSource = app.slice(app.indexOf('  const cursorManualSubmit ='), app.indexOf('  refreshCursorStatus({ discover: true });', app.indexOf('  const cursorManualSubmit =')));
   vm.runInNewContext(`${shellErrorSource}\n${renderSource}\n${submitSource}\nthis.refreshCursorStatus = refreshCursorStatus; this.renderCursorStatus = renderCursorStatus;`, context);
 
@@ -330,11 +372,28 @@ test('Cursor retires a failed manual login message when status is refreshed', as
 
   const refresh = context.refreshCursorStatus({ discover: true });
   assert.equal(errors.textContent, '');
-  statusRequest.resolve({ accounts: [{ id: 'manual', email: 'user@example.com', enabled: true }], linkedCount: 1 });
+  statusRequest.resolve({ accounts: [{ id: 'manual', email: 'user@example.com', enabled: true }], linkedCount: 1,
+    desktopAccount: { email: 'desktop@example.test' } });
   await refresh;
-  assert.equal(statusPill.textContent, 'settings.cursor.connected');
+  assert.equal(statusPill.textContent, '1/1 linked');
+  assert.equal(accountList.children[0].textContent, 'desktop@example.test');
+  assert.equal(accountList.children[1].textContent, t('settings.cursor.desktopUsageNote'));
+  assert.equal(accountList.children.length, 3);
   assert.equal(errors.textContent, '');
   assert.equal(errors.classList.hidden, true);
+  state.cursorAccount.status.accounts = [];
+  state.cursorAccount.status.linkedCount = 0;
+  context.renderCursorStatus();
+  assert.equal(statusPill.textContent, t('settings.cursor.desktopDetected'));
+  assert.equal(accountList.children.length, 2);
+  state.cursorAccount.status.desktopAccount.email = '';
+  context.renderCursorStatus();
+  assert.equal(accountList.children.length, 1);
+  assert.equal(accountList.children[0].textContent, t('settings.cursor.desktopUsageNote'));
+  state.cursorAccount.status.desktopAccount = null;
+  context.renderCursorStatus();
+  assert.equal(statusPill.textContent, t('settings.cursor.notLoggedIn'));
+  assert.equal(accountList.children[0].textContent, t('settings.cursor.empty'));
 });
 
 test('OpenCode status ignores an older probe after a newer status resolves', async () => {

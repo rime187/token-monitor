@@ -166,6 +166,34 @@ test('worker reports reach the owner, and summaries are marked as already transf
   assert.deepEqual(runtime.getArchiveState(), { loaded: true, sessionCount: 2 });
 });
 
+test('Cursor web usage stays in the owner process and stops with its worker', async () => {
+  FakeWorker.reset();
+  const coordinator = createUsageHostCoordinator({ Worker: FakeWorker });
+  let calls = 0;
+  const runtime = coordinator.create({
+    clients: 'cursor',
+    syncCursorWebUsage: async ({ signal }) => {
+      if (++calls === 1) return 'user_web';
+      await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+      throw new Error('aborted');
+    }
+  });
+  await flush();
+  const worker = FakeWorker.last();
+  assert.equal(worker.workerData.options.syncCursorWebUsage, undefined);
+  assert.equal(worker.workerData.callbacks.cursorWebUsage, true);
+  worker.reply({ type: 'cursorWebUsage', id: 1 });
+  await flush();
+  assert.deepEqual(worker.posted.at(-1), { type: 'cursorWebUsageResult', id: 1, value: 'user_web' });
+  worker.reply({ type: 'cursorWebUsage', id: 2 });
+  await flush();
+  runtime.stop();
+  await flush();
+  assert.deepEqual(worker.posted.at(-1), { type: 'cursorWebUsageResult', id: 2, error: 'aborted' });
+  worker.reply({ type: 'stopped' });
+  await runtime.whenIdle();
+});
+
 test('calls made before the worker starts are delivered once it does', async () => {
   FakeWorker.reset();
   const coordinator = createUsageHostCoordinator({ Worker: FakeWorker });

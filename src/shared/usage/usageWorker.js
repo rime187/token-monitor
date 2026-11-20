@@ -24,6 +24,25 @@ const config = workerData || {};
 // process exits before this thread handles its stop.
 trackLiveSubprocesses(config.liveSubprocesses);
 const callbacks = config.callbacks || {};
+let webUsageSequence = 0;
+let webUsageReply = null;
+function syncCursorWebUsage({ signal }) {
+  signal.throwIfAborted();
+  const id = ++webUsageSequence;
+  return new Promise((resolve, reject) => {
+    const cancel = () => post({ type: 'cancelCursorWebUsage', id });
+    signal.addEventListener('abort', cancel, { once: true });
+    webUsageReply = message => {
+      if (message.id !== id) return;
+      signal.removeEventListener('abort', cancel);
+      webUsageReply = null;
+      if (signal.aborted) reject(signal.reason);
+      else if (message.error) reject(new Error(message.error));
+      else resolve(message.value);
+    };
+    post({ type: 'cursorWebUsage', id });
+  });
+}
 const isExternalAgentActive = () => externalAgentActive(config.agentPidPath);
 const store = createSessionUsageArchiveStore({ cursorUsageEvents: createCursorUsageEventIndex() });
 let collector = null;
@@ -95,6 +114,7 @@ function transformed(type, summary, reason) {
 
 collector = startCollector({
   ...config.options,
+  ...(callbacks.cursorWebUsage ? { syncCursorWebUsage } : {}),
   // The owner's rule is "write unless the headless agent owns the archive". A
   // function cannot cross the thread boundary, so it is rebuilt from the same
   // PID file here.
@@ -147,6 +167,10 @@ async function stop(options) {
 }
 
 parentPort.on('message', (message) => {
+  if (message?.type === 'cursorWebUsageResult') {
+    webUsageReply?.(message);
+    return;
+  }
   if (message?.type === 'call' && CALLS.has(message.method)) {
     call(message);
     return;

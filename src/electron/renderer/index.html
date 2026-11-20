@@ -999,12 +999,15 @@
                 <p class="settings-note" data-i18n="settings.cursor.accountsNote">Token Monitor automatically detects accounts signed in through the Cursor desktop app. Uncheck an account to stop monitoring its limits; account-level token usage still includes every saved account.</p>
                 <p id="cursorAgentActiveNote" class="settings-note hidden" data-i18n="settings.cursor.agentActive">Stop the headless agent before adding or removing Cursor accounts.</p>
                 <div id="cursorAccountList" class="managed-account-list"></div>
+                  <div class="settings-actions">
+                    <button id="cursorWebLogin" type="button" data-i18n="settings.cursor.webLogin">Sign in on the web and sync</button>
+                  </div>
                 <div id="cursorManualPanel" class="opencode-add-form">
                   <button id="cursorAddAccountButton" class="opencode-add-summary" type="button" aria-expanded="false" aria-controls="cursorManualDetails">
                     <svg class="add-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
                       <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                     </svg>
-                    <span data-i18n="settings.cursor.addManual">Add account</span>
+                      <span data-i18n="settings.cursor.addManual">Add account manually</span>
                   </button>
                   <div id="cursorManualDetails" class="opencode-add-details accordion-animated-container hidden">
                     <div class="accordion-animation-inner opencode-add-body">
@@ -1018,7 +1021,7 @@
                         <strong>4.</strong> <span data-i18n="settings.cursor.step3Before">Copy the</span> <code>WorkosCursorSessionToken</code> <span data-i18n="settings.cursor.step3After">value.</span><br>
                         <strong>5.</strong> <span data-i18n="settings.cursor.step4">Paste it below and click Save.</span>
                       </p>
-                      <p class="settings-note" data-i18n="settings.cursor.cookieMissing">If the cookie is missing, sign in to the Cursor desktop app, then reopen this account section to detect the account.</p>
+                        <p class="settings-note" data-i18n="settings.cursor.cookieMissing">You can also use the web sign-in button above.</p>
                       <textarea id="cursorManualInput" rows="3" spellcheck="false" placeholder="WorkosCursorSessionToken=..." data-i18n-placeholder="settings.cursor.manualPlaceholder" aria-label="Cursor token" data-i18n-aria-label="settings.cursor.tokenLabel"></textarea>
                       <div class="settings-actions">
                         <button id="cursorManualSubmit" data-i18n="settings.cursor.saveToken">Save token</button>
